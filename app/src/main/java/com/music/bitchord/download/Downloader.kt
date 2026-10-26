@@ -2,6 +2,7 @@ package com.music.bitchord.download
 
 import com.music.bitchord.data.DebugLog as Log
 import com.music.bitchord.data.Http
+import com.music.bitchord.data.deezer.DeezerCipher
 import com.music.bitchord.data.innertube.PlayerClient
 import com.music.bitchord.data.innertube.StreamResolver
 import com.music.bitchord.data.sources.StreamFormat
@@ -169,15 +170,27 @@ object Downloader {
         sink: OutputStream,
         onProgress: (written: Long, total: Long) -> Unit,
     ): Long = withContext(Dispatchers.IO) {
+        val deezerTrackId = headers.entries
+            .firstOrNull { it.key.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true) }
+            ?.value
+            ?.takeIf { it.isNotBlank() }
+        val outboundHeaders = headers.filterKeys {
+            !it.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true)
+        }
         val request = Request.Builder().url(url)
-            .apply { headers.forEach { (name, value) -> header(name, value) } }
+            .apply { outboundHeaders.forEach { (name, value) -> header(name, value) } }
             .build()
 
         Http.client.newCall(request).execute().use { response ->
             if (response.code !in 200..299) error("Download failed (HTTP ${response.code})")
             val body = response.body ?: error("Download failed: empty response")
             val total = response.header("Content-Length")?.toLongOrNull()?.takeIf { it > 0 }
-            val source = body.byteStream()
+            val rawStream = body.byteStream()
+            val source = if (deezerTrackId != null) {
+                DeezerCipher.DecryptingInputStream(rawStream, deezerTrackId)
+            } else {
+                rawStream
+            }
             val buffer = ByteArray(BUFFER_BYTES)
             var written = 0L
 
@@ -218,15 +231,30 @@ object Downloader {
         format: StreamFormat,
     ): Boolean = withContext(Dispatchers.IO) {
         runCatching {
+            val deezerTrackId = headers.entries
+                .firstOrNull { it.key.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true) }
+                ?.value
+                ?.takeIf { it.isNotBlank() }
+            val outboundHeaders = headers.filterKeys {
+                !it.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true)
+            }
+            val probeEnd = if (deezerTrackId != null) DeezerCipher.CHUNK_SIZE - 1 else 31
             val request = Request.Builder().url(url)
-                .header("Range", "bytes=0-31")
-                .apply { headers.forEach { (name, value) -> header(name, value) } }
+                .header("Range", "bytes=0-$probeEnd")
+                .apply { outboundHeaders.forEach { (name, value) -> header(name, value) } }
                 .build()
             Http.client.newCall(request).execute().use { response ->
                 if (response.code !in 200..299) return@use false
                 val type = response.header("Content-Type").orEmpty().lowercase()
                 if ("mpegurl" in type || "vnd.apple.mpegurl" in type) return@use false
-                val head = response.body?.byteStream()?.readNBytes(32) ?: return@use false
+                val rawHead = response.body?.byteStream()?.readNBytes(probeEnd + 1) ?: return@use false
+                val head = if (deezerTrackId != null) {
+                    DeezerCipher.decryptStream(rawHead, deezerTrackId).let {
+                        if (it.size > 32) it.copyOfRange(0, 32) else it
+                    }
+                } else {
+                    rawHead
+                }
                 if (head.startsWith("#EXTM3U".toByteArray())) return@use false
                 when (format.codec?.lowercase()) {
                     "flac", "x-flac" -> head.startsWith("fLaC".toByteArray())

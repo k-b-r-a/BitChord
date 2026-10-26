@@ -1241,4 +1241,16 @@
     <string name="no_audio_version">No audio version found for this video</string>
     <string name="no_video_version">No video version found for this song</string>
     <string name="version_switch_in_party">Everyone in Listen Together hears the same version</string>
+    <string name="deezer" translatable="false">Deezer</string>
+    <string name="deezer_description" translatable="false">Authenticate with your Deezer ARL cookie or browser sign-in to stream up to HiFi FLAC or 320 kbps MP3 according to your account tier.</string>
+    <string name="deezer_not_configured" translatable="false">Not connected — ARL token required</string>
+    <string name="deezer_arl_title" translatable="false">Deezer ARL Token</string>
+    <string name="deezer_arl_description" translatable="false">Paste your Deezer arl cookie token below, or sign in through the browser to capture it automatically.</string>
+    <string name="deezer_arl_placeholder" translatable="false">Paste arl token</string>
+    <string name="deezer_sign_in_title" translatable="false">Sign in to Deezer</string>
+    <string name="deezer_sign_in_browser" translatable="false">Sign in with Browser</string>
+    <string name="deezer_paste_arl" translatable="false">Set ARL Token</string>
+    <string name="deezer_refresh_session" translatable="false">Verify &amp; Refresh Session</string>
+    <string name="deezer_disconnect" translatable="false">Disconnect Deezer</string>
+    <string name="deezer_validating" translatable="false">Validating ARL token…</string>
 </resources>

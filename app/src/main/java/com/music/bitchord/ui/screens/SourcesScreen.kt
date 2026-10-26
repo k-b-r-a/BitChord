@@ -67,6 +67,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.R
+import com.music.bitchord.auth.clearDeezerWebSession
+import com.music.bitchord.data.deezer.DeezerAuthResult
+import com.music.bitchord.data.deezer.DeezerService
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.permits
 import com.music.bitchord.data.smb.SmbRepository
@@ -120,6 +123,10 @@ fun SourcesScreen(
     onEditSmb: () -> Unit,
     /** Opens the full-window warning before JioSaavn is opted into. */
     onConfirmJioSaavn: () -> Unit,
+    /** Opens the frosted ARL token input dialog for Deezer. */
+    onEditDeezerArl: () -> Unit = {},
+    /** Opens the interactive WebView sign-in screen for Deezer. */
+    onOpenDeezerLogin: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -135,6 +142,11 @@ fun SourcesScreen(
     val smbShare by AppSettings.smbShare.collectAsStateWithLifecycle()
     val smbUsername by AppSettings.smbUsername.collectAsStateWithLifecycle()
     val smbPassword by AppSettings.smbPassword.collectAsStateWithLifecycle()
+    val deezerArl by AppSettings.deezerArl.collectAsStateWithLifecycle()
+    val deezerUserName by AppSettings.deezerUserName.collectAsStateWithLifecycle()
+    val deezerTier by AppSettings.deezerTier.collectAsStateWithLifecycle()
+    val deezerAuthError by DeezerService.authError.collectAsStateWithLifecycle()
+    val deezerValidating by DeezerService.validating.collectAsStateWithLifecycle()
 
     /** Last known reachability per source, filled in as the probes come back. */
     val health = remember { mutableStateMapOf<String, SourceHealth>() }
@@ -170,6 +182,19 @@ fun SourcesScreen(
                     SourceRegistry.update(config.copy(label = named))
                 }
             }
+        }
+    }
+
+    LaunchedEffect(deezerArl, configs.firstOrNull { it.kind == SourceKind.DEEZER }?.id) {
+        val deezerConfig = configs.firstOrNull { it.kind == SourceKind.DEEZER } ?: return@LaunchedEffect
+        if (deezerArl.isBlank()) {
+            health.remove(deezerConfig.id)
+            return@LaunchedEffect
+        }
+        val source = SourceRegistry.instance(deezerConfig.id) ?: return@LaunchedEffect
+        health[deezerConfig.id] = withContext(Dispatchers.IO) {
+            runCatching { source.health() }
+                .getOrElse { SourceHealth.Unreachable(it.message ?: "Failed") }
         }
     }
 
@@ -247,7 +272,11 @@ fun SourcesScreen(
                         // Anything the user configured is theirs to edit or
                         // delete. JioSaavn and YouTube have no address to
                         // change, so a tap on them would open an empty editor.
-                        onClick = if (config.kind.needsServer) ({ onEditSource(config) }) else null,
+                        onClick = when {
+                            config.kind.needsServer -> ({ onEditSource(config) })
+                            config.kind == SourceKind.DEEZER -> onEditDeezerArl
+                            else -> null
+                        },
                         // YouTube gets no switch at all — see
                         // [SourceRegistry.setEnabled] for why one would be a lie.
                         onToggle = if (config.kind == SourceKind.YOUTUBE) {
@@ -256,6 +285,8 @@ fun SourcesScreen(
                             ({ enabled ->
                                 if (config.kind == SourceKind.JIOSAAVN && enabled && !config.enabled) {
                                     onConfirmJioSaavn()
+                                } else if (config.kind == SourceKind.DEEZER && enabled && deezerArl.isBlank()) {
+                                    onEditDeezerArl()
                                 } else {
                                     SourceRegistry.setEnabled(config.id, enabled)
                                 }
@@ -294,6 +325,42 @@ fun SourcesScreen(
                 onClick = { onEditSource(SourceConfig(kind = SourceKind.ADDON)) },
             )
         }
+
+        DeezerAccountSection(
+            arlConfigured = deezerArl.isNotBlank(),
+            userName = deezerUserName,
+            tierLabel = deezerTier,
+            authError = deezerAuthError,
+            validating = deezerValidating,
+            onEditArl = onEditDeezerArl,
+            onOpenBrowserLogin = onOpenDeezerLogin,
+            onRefreshSession = {
+                val dzConfig = configs.firstOrNull { it.kind == SourceKind.DEEZER }
+                if (deezerArl.isNotBlank()) {
+                    when (val res = DeezerService.validateArl(deezerArl, persistOnSuccess = true)) {
+                        is DeezerAuthResult.Authenticated -> {
+                            dzConfig?.let {
+                                health[it.id] = SourceHealth.Ok("${res.session.userName} · ${res.session.tier.label}")
+                            }
+                        }
+                        is DeezerAuthResult.InvalidToken -> {
+                            dzConfig?.let { health[it.id] = SourceHealth.Rejected(res.reason) }
+                        }
+                        is DeezerAuthResult.NetworkError -> {
+                            dzConfig?.let { health[it.id] = SourceHealth.Unreachable(res.reason) }
+                        }
+                    }
+                }
+            },
+            onDisconnect = {
+                AppSettings.clearDeezer()
+                clearDeezerWebSession()
+                configs.firstOrNull { it.kind == SourceKind.DEEZER }?.let { dz ->
+                    health.remove(dz.id)
+                    if (dz.enabled) SourceRegistry.setEnabled(dz.id, false)
+                }
+            },
+        )
 
         // A personal library rather than a catalogue in the order above: it
         // holds the listener's own files instead of answering for YouTube's,
@@ -793,6 +860,7 @@ private fun SourceRow(
                 SourceKind.ADDON -> Icons.Rounded.Extension
                 SourceKind.CUSTOM_MODULE -> Icons.Rounded.Extension
                 SourceKind.MODULE -> Icons.Rounded.Extension
+                SourceKind.DEEZER -> Icons.Rounded.GraphicEq
                 SourceKind.JIOSAAVN -> Icons.Rounded.GraphicEq // or some other icon
                 SourceKind.YOUTUBE -> Icons.Rounded.PlayCircle
             },
@@ -890,10 +958,84 @@ private fun AudioQuality.localizedLabel(): String = stringResource(
     },
 )
 
+@Composable
+private fun DeezerAccountSection(
+    arlConfigured: Boolean,
+    userName: String,
+    tierLabel: String,
+    authError: String?,
+    validating: Boolean,
+    onEditArl: () -> Unit,
+    onOpenBrowserLogin: () -> Unit,
+    onRefreshSession: suspend () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val statusText = when {
+        validating -> stringResource(R.string.deezer_validating)
+        authError != null -> authError
+        arlConfigured && userName.isNotBlank() && tierLabel.isNotBlank() ->
+            "${stringResource(R.string.connected)} · $userName · $tierLabel"
+        arlConfigured && tierLabel.isNotBlank() ->
+            "${stringResource(R.string.connected)} · $tierLabel"
+        arlConfigured -> stringResource(R.string.connected)
+        else -> stringResource(R.string.deezer_not_configured)
+    }
+
+    SettingsGroup(
+        header = stringResource(R.string.deezer),
+        footer = stringResource(R.string.deezer_description),
+    ) {
+        SettingsRow(
+            icon = Icons.Rounded.GraphicEq,
+            title = stringResource(R.string.deezer_paste_arl),
+            subtitle = statusText,
+            onClick = onEditArl,
+        )
+        RowDivider()
+        SettingsRow(
+            icon = Icons.Rounded.Cloud,
+            title = stringResource(R.string.deezer_sign_in_browser),
+            subtitle = stringResource(R.string.deezer_sign_in_title),
+            onClick = onOpenBrowserLogin,
+        )
+        if (arlConfigured) {
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.Dns,
+                title = stringResource(R.string.deezer_refresh_session),
+                subtitle = if (validating) stringResource(R.string.checking) else statusText,
+                onClick = {
+                    if (!validating) {
+                        scope.launch { onRefreshSession() }
+                    }
+                },
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.DeleteSweep,
+                title = stringResource(R.string.deezer_disconnect),
+                onClick = onDisconnect,
+            )
+        }
+    }
+}
+
 /** The second line of a row: what this source is, or what is wrong with it. */
 @Composable
 private fun SourceConfig.statusLine(health: SourceHealth?): String = when {
     !isComplete -> stringResource(R.string.source_setup_required)
+    kind == SourceKind.DEEZER && health == null -> {
+        val arl = AppSettings.deezerArl.value
+        val tier = AppSettings.deezerTier.value
+        val user = AppSettings.deezerUserName.value
+        when {
+            arl.isBlank() -> stringResource(R.string.deezer_not_configured)
+            user.isNotBlank() && tier.isNotBlank() -> "$user · $tier"
+            tier.isNotBlank() -> tier
+            else -> kind.labels.take(3).joinToString(" · ")
+        }
+    }
     kind == SourceKind.JIOSAAVN -> stringResource(R.string.jiosaavn_mismatch_warning)
     health is SourceHealth.Ok -> listOfNotNull(
         health.detail,

@@ -102,6 +102,78 @@ fun ListenBrainzTokenAlert(
 
 @OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
+fun DeezerArlAlert(
+    hazeState: HazeState,
+    arlInput: String,
+    onArlInputChange: (String) -> Unit,
+    error: String?,
+    loading: Boolean,
+    onSave: () -> Unit,
+    onOpenBrowserLogin: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertScaffold(hazeState = hazeState, onDismiss = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 19.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = stringResource(R.string.deezer_arl_title),
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.W600),
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = when {
+                    loading -> stringResource(R.string.deezer_validating)
+                    error != null -> error
+                    else -> stringResource(R.string.deezer_arl_description)
+                },
+                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
+                color = if (error != null && !loading) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                textAlign = TextAlign.Center,
+            )
+            PillTextField(
+                value = arlInput,
+                onValueChange = onArlInputChange,
+                placeholder = stringResource(R.string.deezer_arl_placeholder),
+                enabled = !loading,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (arlInput.isNotBlank() && !loading) onSave() }),
+            )
+        }
+        AlertRule()
+        AlertAction(
+            label = stringResource(R.string.save),
+            emphasised = true,
+            enabled = arlInput.isNotBlank() && !loading,
+            onClick = onSave,
+        )
+        AlertRule()
+        AlertAction(
+            label = stringResource(R.string.deezer_sign_in_browser),
+            emphasised = false,
+            enabled = !loading,
+            onClick = onOpenBrowserLogin,
+        )
+        AlertRule()
+        AlertAction(
+            label = stringResource(R.string.cancel),
+            emphasised = false,
+            onClick = onDismiss,
+        )
+    }
+}
+
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
 fun LastfmLoginAlert(
     hazeState: HazeState,
     usernameInput: String,

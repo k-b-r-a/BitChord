@@ -40,8 +40,9 @@ fun AudioQuality.permits(kind: SourceKind): Boolean = when (this) {
     // No lossless answer is wanted here, and a source that can serve one is
     // the slow half of the list: an addon fronting several catalogues walks
     // all of them before it answers, which is seconds spent to land on a
-    // transcode JioSaavn already has at 320.
-    AudioQuality.HIGH -> !kind.canServeLossless
+    // transcode JioSaavn already has at 320. Deezer is a direct first-party
+    // catalogue that serves MP3_320 natively when capped at High.
+    AudioQuality.HIGH -> !kind.canServeLossless || kind == SourceKind.DEEZER
     AudioQuality.MEDIUM, AudioQuality.LOW -> kind == SourceKind.YOUTUBE
 }
 
@@ -658,6 +659,20 @@ object AppSettings {
     val listenBrainzPrimaryArtistOnly = MutableStateFlow(false)
     val spotifySpdcToken = MutableStateFlow("")
 
+    // ── Deezer ──────────────────────────────────────────────────────────
+
+    /**
+     * The connected Deezer account's ARL token and gateway session state,
+     * mirrored out of [AuthStore] so [com.music.bitchord.data.deezer.DeezerService]
+     * and the Sources UI can observe it reactively while the persisted token
+     * stays encrypted at rest and excluded from backup exports.
+     */
+    val deezerArl = MutableStateFlow("")
+    val deezerSid = MutableStateFlow("")
+    val deezerLicenseToken = MutableStateFlow("")
+    val deezerUserName = MutableStateFlow("")
+    val deezerTier = MutableStateFlow("")
+
     // ── Discord Rich Presence ───────────────────────────────────────────
 
     /**
@@ -977,6 +992,11 @@ object AppSettings {
             webdavPassword.value,
         )
         pinnedPlaylists.value = readPinnedPlaylists()
+        deezerArl.value = authStore.deezerArl.orEmpty()
+        deezerSid.value = authStore.deezerSid.orEmpty()
+        deezerLicenseToken.value = authStore.deezerLicenseToken.orEmpty()
+        deezerUserName.value = prefs.getString(KEY_DEEZER_USERNAME, "").orEmpty()
+        deezerTier.value = prefs.getString(KEY_DEEZER_TIER, "").orEmpty()
         discordToken.value = authStore.discordToken.orEmpty()
         discordUsername.value = prefs.getString(KEY_DISCORD_USERNAME, "").orEmpty()
         discordName.value = prefs.getString(KEY_DISCORD_NAME, "").orEmpty()
@@ -1906,6 +1926,73 @@ object AppSettings {
         setDiscordAccount("", "", null)
     }
 
+    /** Writes the Deezer ARL token through to the encrypted store. */
+    fun setDeezerArl(value: String) {
+        val clean = value.trim()
+        deezerArl.value = clean
+        if (this::authStore.isInitialized) {
+            authStore.deezerArl = clean.ifEmpty { null }
+        }
+    }
+
+    /** Persists validated Deezer session tokens and account metadata. */
+    fun setDeezerSessionInfo(
+        arl: String,
+        sid: String = "",
+        licenseToken: String = "",
+        userName: String = "",
+        tier: String = "",
+    ) {
+        val cleanArl = arl.trim()
+        deezerArl.value = cleanArl
+        deezerSid.value = sid.trim()
+        deezerLicenseToken.value = licenseToken.trim()
+        deezerUserName.value = userName.trim()
+        deezerTier.value = tier.trim()
+        if (this::authStore.isInitialized) {
+            authStore.deezerArl = cleanArl.ifEmpty { null }
+            authStore.deezerSid = sid.trim().ifEmpty { null }
+            authStore.deezerLicenseToken = licenseToken.trim().ifEmpty { null }
+        }
+        if (this::prefs.isInitialized) {
+            prefs.edit()
+                .putString(KEY_DEEZER_USERNAME, userName.trim())
+                .putString(KEY_DEEZER_TIER, tier.trim())
+                .apply()
+        }
+    }
+
+    /** Clears transient gateway session tokens when an ARL expires or fails validation. */
+    fun clearDeezerSessionTokens() {
+        deezerSid.value = ""
+        deezerLicenseToken.value = ""
+        if (this::authStore.isInitialized) {
+            authStore.deezerSid = null
+            authStore.deezerLicenseToken = null
+        }
+    }
+
+    /** Clears all stored Deezer credentials and profile metadata. */
+    fun clearDeezer() {
+        deezerArl.value = ""
+        deezerSid.value = ""
+        deezerLicenseToken.value = ""
+        deezerUserName.value = ""
+        deezerTier.value = ""
+        if (this::authStore.isInitialized) {
+            authStore.deezerArl = null
+            authStore.deezerSid = null
+            authStore.deezerLicenseToken = null
+        }
+        if (this::prefs.isInitialized) {
+            prefs.edit()
+                .remove(KEY_DEEZER_USERNAME)
+                .remove(KEY_DEEZER_TIER)
+                .apply()
+        }
+        com.music.bitchord.data.deezer.DeezerService.invalidateSession()
+    }
+
     // ── Backup ──────────────────────────────────────────────────────────────
 
     /**
@@ -2114,6 +2201,8 @@ object AppSettings {
     private const val KEY_LISTENBRAINZ_TOKEN = "listenbrainz_token"
     private const val KEY_LISTENBRAINZ_PRIMARY_ARTIST_ONLY = "listenbrainz_primary_artist_only"
     private const val KEY_SPOTIFY_SPDC_TOKEN = "spotify_spdc_token"
+    private const val KEY_DEEZER_USERNAME = "deezer_username"
+    private const val KEY_DEEZER_TIER = "deezer_tier"
 
     private const val KEY_DISCORD_USERNAME = "discord_username"
     private const val KEY_DISCORD_NAME = "discord_name"

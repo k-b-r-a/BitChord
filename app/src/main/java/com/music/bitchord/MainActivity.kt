@@ -600,6 +600,9 @@ private fun BitChordApp(
     // and the mini player, like every other alert in the app.
     var editingSource by remember { mutableStateOf<SourceConfig?>(null) }
     var confirmJioSaavn by remember { mutableStateOf(false) }
+    var showDeezerArlDialog by remember { mutableStateOf(false) }
+    var showDeezerLogin by remember { mutableStateOf(false) }
+    var deezerArlInput by remember { mutableStateOf("") }
     var editingPartyServer by remember { mutableStateOf(false) }
     var editingSignatureApi by remember { mutableStateOf(false) }
     var librarySortMenuOpen by remember { mutableStateOf(false) }
@@ -2902,6 +2905,11 @@ private fun BitChordApp(
                                 onEditWebDav = { showWebDavEditor = true },
                                 onEditSmb = { showSmbEditor = true },
                                 onConfirmJioSaavn = { confirmJioSaavn = true },
+                                onEditDeezerArl = {
+                                    deezerArlInput = AppSettings.deezerArl.value
+                                    showDeezerArlDialog = true
+                                },
+                                onOpenDeezerLogin = { showDeezerLogin = true },
                             )
                         } else if (pageRoute == AppRoute.WearOs) {
                             WearOsScreen(contentPadding = listPadding)
@@ -5575,6 +5583,50 @@ private fun BitChordApp(
                     confirmJioSaavn = false
                 },
                 onDismiss = { confirmJioSaavn = false },
+            )
+        }
+
+        if (showDeezerArlDialog) {
+            val deezerError by com.music.bitchord.data.deezer.DeezerService.authError.collectAsStateWithLifecycle()
+            val deezerValidating by com.music.bitchord.data.deezer.DeezerService.validating.collectAsStateWithLifecycle()
+            com.music.bitchord.ui.components.DeezerArlAlert(
+                hazeState = hazeState,
+                arlInput = deezerArlInput,
+                onArlInputChange = { deezerArlInput = it },
+                error = deezerError,
+                loading = deezerValidating,
+                onSave = {
+                    scope.launch {
+                        val res = com.music.bitchord.data.deezer.DeezerService.validateArl(
+                            deezerArlInput,
+                            persistOnSuccess = true,
+                        )
+                        if (res is com.music.bitchord.data.deezer.DeezerAuthResult.Authenticated) {
+                            SourceRegistry.configs.value
+                                .firstOrNull { it.kind == SourceKind.DEEZER }
+                                ?.let { SourceRegistry.setEnabled(it.id, true) }
+                            showDeezerArlDialog = false
+                        }
+                    }
+                },
+                onOpenBrowserLogin = {
+                    showDeezerArlDialog = false
+                    showDeezerLogin = true
+                },
+                onDismiss = { showDeezerArlDialog = false },
+            )
+        }
+
+        if (showDeezerLogin) {
+            com.music.bitchord.auth.DeezerLoginScreen(
+                onCaptured = { arl ->
+                    deezerArlInput = arl
+                    SourceRegistry.configs.value
+                        .firstOrNull { it.kind == SourceKind.DEEZER }
+                        ?.let { SourceRegistry.setEnabled(it.id, true) }
+                    showDeezerLogin = false
+                },
+                onCancel = { showDeezerLogin = false },
             )
         }
 

@@ -127,6 +127,16 @@ enum class SourceKind(
         rank = 1,
     ),
 
+    DEEZER(
+        label = "Deezer",
+        detail = "Optional Deezer streams up to HiFi FLAC (16-bit/44.1kHz) or 320kbps MP3 using your Deezer account ARL.",
+        labels = listOf("FLAC", "Lossless", "320kbps"),
+        needsServer = false,
+        canServeLossless = true,
+        worthPrefetching = true,
+        rank = 2,
+    ),
+
     JIOSAAVN(
         label = "JioSaavn",
         detail = "Optional JioSaavn streams up to 320kbps AAC/MP4. Catalogue matching can select the wrong song.",

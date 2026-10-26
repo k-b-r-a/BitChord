@@ -121,6 +121,19 @@ class AuthStore(context: Context) {
         get() = prefs.getString(KEY_SMB_PASSWORD, null)
         set(value) = prefs.edit().putString(KEY_SMB_PASSWORD, value).apply()
 
+    /** The Deezer account's ARL token and gateway session tokens, encrypted at rest. */
+    var deezerArl: String?
+        get() = prefs.getString(KEY_DEEZER_ARL, null)
+        set(value) = prefs.edit().putString(KEY_DEEZER_ARL, value).apply()
+
+    var deezerSid: String?
+        get() = prefs.getString(KEY_DEEZER_SID, null)
+        set(value) = prefs.edit().putString(KEY_DEEZER_SID, value).apply()
+
+    var deezerLicenseToken: String?
+        get() = prefs.getString(KEY_DEEZER_LICENSE_TOKEN, null)
+        set(value) = prefs.edit().putString(KEY_DEEZER_LICENSE_TOKEN, value).apply()
+
     /**
      * The channel the listener chose to act as, if they chose one.
      *
@@ -230,5 +243,8 @@ class AuthStore(context: Context) {
         private const val KEY_DISCORD_TOKEN = "discord_token"
         private const val KEY_WEBDAV_PASSWORD = "webdav_password"
         private const val KEY_SMB_PASSWORD = "smb_password"
+        private const val KEY_DEEZER_ARL = "deezer_arl"
+        private const val KEY_DEEZER_SID = "deezer_sid"
+        private const val KEY_DEEZER_LICENSE_TOKEN = "deezer_license_token"
     }
 }

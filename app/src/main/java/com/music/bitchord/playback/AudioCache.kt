@@ -538,7 +538,7 @@ object AudioCache {
      */
     private fun isKeptOrigin(key: String): Boolean = runCatching {
         val origin = cache.getContentMetadata(key).get(META_ORIGIN, null as String?)
-        origin == Origin.YOUTUBE.name || origin == Origin.JIOSAAVN.name
+        origin == Origin.YOUTUBE.name || origin == Origin.DEEZER.name || origin == Origin.JIOSAAVN.name
     }.getOrDefault(false)
 
     /** Whether every byte of the entry [key] is on disk. */
@@ -599,7 +599,7 @@ object AudioCache {
      * while the track plays from JioSaavn or an addon, and not for read-ahead
      * of a track the queue never reached.
      */
-    enum class Origin { YOUTUBE, JIOSAAVN, OTHER }
+    enum class Origin { YOUTUBE, DEEZER, JIOSAAVN, OTHER }
 
     /** One track in the Cached songs folder. */
     data class CachedSong(
@@ -770,6 +770,7 @@ object AudioCache {
     private fun originOf(uri: Uri, mediaId: String, servedUrl: String): Origin {
         val host = runCatching { Uri.parse(servedUrl).host }.getOrNull()?.lowercase(Locale.ROOT).orEmpty()
         if (host.endsWith("googlevideo.com") || host.endsWith("youtube.com")) return Origin.YOUTUBE
+        if (host.endsWith("dzcdn.net") || host.endsWith("deezer.com")) return Origin.DEEZER
         if (host.endsWith("saavncdn.com") || host.endsWith("jiosaavn.com")) return Origin.JIOSAAVN
         val upgrade = QualityUpgrade.forcedStream(uri)
         val configId = when {
@@ -778,7 +779,11 @@ object AudioCache {
             else -> StreamChoice.of(mediaId)?.sourceConfigId
         }
         val kind = configId?.let { SourceRegistry.config(it)?.kind }
-        return if (kind == SourceKind.JIOSAAVN) Origin.JIOSAAVN else Origin.OTHER
+        return when (kind) {
+            SourceKind.DEEZER -> Origin.DEEZER
+            SourceKind.JIOSAAVN -> Origin.JIOSAAVN
+            else -> Origin.OTHER
+        }
     }
 
     /** Writes what the folder shows about a track into [mutations]. */
@@ -1060,6 +1065,7 @@ object AudioCache {
     private val Origin.label: String
         get() = when (this) {
             Origin.YOUTUBE -> SourceKind.YOUTUBE.label
+            Origin.DEEZER -> SourceKind.DEEZER.label
             Origin.JIOSAAVN -> SourceKind.JIOSAAVN.label
             Origin.OTHER -> "Addon"
         }

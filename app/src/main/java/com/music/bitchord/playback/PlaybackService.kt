@@ -1657,8 +1657,12 @@ class PlaybackService : MediaLibraryService() {
         val resolvingFactory = ResolvingDataSource.Factory(
             // Innermost, so it chunks the real googlevideo URL the resolver
             // above has already substituted in — see [ChunkedDataSource] for
-            // why an open-ended read of one is worth avoiding.
-            ChunkedDataSource.Factory(OkHttpDataSource.Factory(Http.client), STREAM_CHUNK_BYTES),
+            // why an open-ended read of one is worth avoiding. Wrapped in
+            // [DeezerDataSource] so encrypted BF_CBC_STRIPE streams are
+            // decrypted in 2048-byte chunks before reaching the cache or player.
+            DeezerDataSource.Factory(
+                ChunkedDataSource.Factory(OkHttpDataSource.Factory(Http.client), STREAM_CHUNK_BYTES),
+            ),
         ) { dataSpec ->
             // Wrapped rather than folded into the resolver above so the record
             // is made in one place for every branch of it, and made from what
