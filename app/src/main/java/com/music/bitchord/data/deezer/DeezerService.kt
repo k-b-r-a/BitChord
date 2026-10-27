@@ -1,14 +1,7 @@
 package com.music.bitchord.data.deezer
 
 import android.util.Log
-import com.music.bitchord.data.model.ArtistPage
-import com.music.bitchord.data.model.BrowseItem
-import com.music.bitchord.data.model.BrowseType
-import com.music.bitchord.data.model.DetailPage
-import com.music.bitchord.data.model.HomeShelf
-import com.music.bitchord.data.model.ShelfItem
 import com.music.bitchord.data.model.Song
-import com.music.bitchord.data.model.UiState
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.sources.StreamRequest
 import io.ktor.client.HttpClient
@@ -51,8 +44,6 @@ private const val GATEWAY_URL = "https://www.deezer.com/ajax/gw-light.php"
 private const val MEDIA_URL = "https://media.deezer.com/v1/get_url"
 private const val PUBLIC_API_URL = "https://api.deezer.com"
 private const val CDN_COVER_BASE = "https://e-cdns-images.dzcdn.net/images/cover"
-private const val CDN_ARTIST_BASE = "https://e-cdns-images.dzcdn.net/images/artist"
-private const val CDN_PLAYLIST_BASE = "https://e-cdns-images.dzcdn.net/images/playlist"
 private const val USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 private const val SESSION_TTL_MS = 25L * 60L * 1000L
@@ -890,75 +881,6 @@ object DeezerService {
         )
     }
 
-    fun mapAlbumToBrowseItem(item: JsonObject): BrowseItem? {
-        val id = item["ALB_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val title = item["ALB_TITLE"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["title"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val artist = item["ART_NAME"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: (item["artist"] as? JsonObject)?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: ""
-        val cover = item["cover_xl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["cover_big"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["cover_medium"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: coverUrlFromPictureId(item["ALB_PICTURE"]?.jsonPrimitive?.content)
-
-        return BrowseItem(
-            browseId = id,
-            title = title,
-            subtitle = artist,
-            thumbnailUrl = cover,
-            type = BrowseType.ALBUM,
-        )
-    }
-
-    fun mapArtistToBrowseItem(item: JsonObject): BrowseItem? {
-        val id = item["ART_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val name = item["ART_NAME"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["name"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val cover = item["picture_xl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["picture_big"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["picture_medium"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: coverUrlFromPictureId(item["ART_PICTURE"]?.jsonPrimitive?.content, CDN_ARTIST_BASE)
-
-        return BrowseItem(
-            browseId = id,
-            title = name,
-            subtitle = "Artist",
-            thumbnailUrl = cover,
-            type = BrowseType.ARTIST,
-        )
-    }
-
-    fun mapPlaylistToBrowseItem(item: JsonObject): BrowseItem? {
-        val id = item["PLAYLIST_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val title = item["TITLE"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["title"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val creator = item["PARENT_USERNAME"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: (item["user"] as? JsonObject)?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: "Playlist"
-        val cover = item["picture_xl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["picture_big"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["picture_medium"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: coverUrlFromPictureId(item["PLAYLIST_PICTURE"]?.jsonPrimitive?.content, CDN_PLAYLIST_BASE)
-
-        return BrowseItem(
-            browseId = id,
-            title = title,
-            subtitle = creator,
-            thumbnailUrl = cover,
-            type = BrowseType.PLAYLIST,
-        )
-    }
-
     fun parseTrackSearchResponse(rawJson: String): List<Song> {
         val root = runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull() ?: return emptyList()
         val dataArray = (root["data"] as? JsonArray)
@@ -967,135 +889,6 @@ object DeezerService {
             ?: return emptyList()
         val mapped = dataArray.mapNotNull { elem -> (elem as? JsonObject)?.let(::mapTrackToSong) }
         return prioritizeDeezerExplicit(mapped)
-    }
-
-    fun parseAlbumDetailsResponse(rawJson: String, fallbackBrowseId: String = ""): DetailPage? {
-        val root = runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull() ?: return null
-        val albumObj = ((root["results"] as? JsonObject)?.get("DATA") as? JsonObject) ?: root
-        val browseId = albumObj["ALB_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: albumObj["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: fallbackBrowseId
-        val title = albumObj["ALB_TITLE"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: albumObj["title"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val artist = albumObj["ART_NAME"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: (albumObj["artist"] as? JsonObject)?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: ""
-        val cover = albumObj["cover_xl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: albumObj["cover_big"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: coverUrlFromPictureId(albumObj["ALB_PICTURE"]?.jsonPrimitive?.content)
-
-        val tracksArray = ((albumObj["tracks"] as? JsonObject)?.get("data") as? JsonArray)
-            ?: (((root["results"] as? JsonObject)?.get("SONGS") as? JsonObject)?.get("data") as? JsonArray)
-            ?: JsonArray(emptyList())
-
-        val songs = tracksArray.mapNotNull { elem ->
-            val trackObj = elem as? JsonObject ?: return@mapNotNull null
-            mapTrackToSong(trackObj)?.let { s ->
-                s.copy(
-                    albumName = s.albumName ?: title,
-                    thumbnailUrl = s.thumbnailUrl ?: cover,
-                )
-            }
-        }
-        return DetailPage(
-            browseId = browseId,
-            title = title,
-            subtitle = artist,
-            thumbnailUrl = cover,
-            songs = UiState.Success(songs),
-            type = BrowseType.ALBUM,
-        )
-    }
-
-    fun parsePlaylistDetailsResponse(rawJson: String, fallbackBrowseId: String = ""): DetailPage? {
-        val root = runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull() ?: return null
-        val playlistObj = ((root["results"] as? JsonObject)?.get("DATA") as? JsonObject) ?: root
-        val browseId = playlistObj["PLAYLIST_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: playlistObj["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: fallbackBrowseId
-        val title = playlistObj["TITLE"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: playlistObj["title"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val subtitle = playlistObj["DESCRIPTION"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: playlistObj["description"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: (playlistObj["creator"] as? JsonObject)?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: ""
-        val cover = playlistObj["picture_xl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: playlistObj["picture_big"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: coverUrlFromPictureId(playlistObj["PLAYLIST_PICTURE"]?.jsonPrimitive?.content, CDN_PLAYLIST_BASE)
-
-        val tracksArray = ((playlistObj["tracks"] as? JsonObject)?.get("data") as? JsonArray)
-            ?: (((root["results"] as? JsonObject)?.get("SONGS") as? JsonObject)?.get("data") as? JsonArray)
-            ?: JsonArray(emptyList())
-
-        val songs = tracksArray.mapNotNull { elem -> (elem as? JsonObject)?.let(::mapTrackToSong) }
-        return DetailPage(
-            browseId = browseId,
-            title = title,
-            subtitle = subtitle,
-            thumbnailUrl = cover,
-            songs = UiState.Success(songs),
-            type = BrowseType.PLAYLIST,
-        )
-    }
-
-    fun parseArtistDetailsResponse(
-        artistJson: String,
-        topTracksJson: String? = null,
-        albumsJson: String? = null,
-    ): ArtistPage? {
-        val root = runCatching { json.parseToJsonElement(artistJson).jsonObject }.getOrNull() ?: return null
-        val artistObj = ((root["results"] as? JsonObject)?.get("DATA") as? JsonObject) ?: root
-        val name = artistObj["ART_NAME"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: artistObj["name"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val cover = artistObj["picture_xl"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: artistObj["picture_big"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: coverUrlFromPictureId(artistObj["ART_PICTURE"]?.jsonPrimitive?.content, CDN_ARTIST_BASE)
-
-        val topSongs = topTracksJson?.let(::parseTrackSearchResponse)
-            ?: (((root["results"] as? JsonObject)?.get("TOP") as? JsonObject)?.get("data") as? JsonArray)
-                ?.mapNotNull { (it as? JsonObject)?.let(::mapTrackToSong) }
-            ?: emptyList()
-
-        val albumsArr = albumsJson?.let { raw ->
-            runCatching { json.parseToJsonElement(raw).jsonObject["data"] as? JsonArray }.getOrNull()
-        } ?: (((root["results"] as? JsonObject)?.get("ALBUMS") as? JsonObject)?.get("data") as? JsonArray)
-            ?: JsonArray(emptyList())
-
-        val albumItems = albumsArr.mapNotNull { elem ->
-            val obj = elem as? JsonObject ?: return@mapNotNull null
-            val id = obj["ALB_ID"]?.jsonPrimitive?.content ?: obj["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            val albTitle = obj["ALB_TITLE"]?.jsonPrimitive?.content ?: obj["title"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            val albCover = obj["cover_xl"]?.jsonPrimitive?.content
-                ?: obj["cover_big"]?.jsonPrimitive?.content
-                ?: coverUrlFromPictureId(obj["ALB_PICTURE"]?.jsonPrimitive?.content)
-            val releaseDate = obj["PHYSICAL_RELEASE_DATE"]?.jsonPrimitive?.content
-                ?: obj["release_date"]?.jsonPrimitive?.content
-            val year = releaseDate?.take(4)?.takeIf { it.length == 4 } ?: "Album"
-            ShelfItem(
-                title = albTitle,
-                subtitle = year,
-                thumbnailUrl = albCover,
-                videoId = null,
-                browseId = id,
-            )
-        }
-
-        val sections = if (albumItems.isNotEmpty()) {
-            listOf(HomeShelf(title = "Albums", items = albumItems))
-        } else {
-            emptyList()
-        }
-
-        return ArtistPage(
-            songs = topSongs,
-            moreSongsBrowseId = null,
-            sections = sections,
-            thumbnailUrl = cover,
-            name = name,
-        )
     }
 
     suspend fun searchTracks(query: String, limit: Int = 10): List<Song> = withContext(Dispatchers.IO) {
@@ -1126,105 +919,6 @@ object DeezerService {
         } catch (e: Exception) {
             Log.e(TAG, "Deezer track search failed for '$query'", e)
             emptyList()
-        }
-    }
-
-    suspend fun searchAlbums(query: String, limit: Int = 10): List<BrowseItem> = withContext(Dispatchers.IO) {
-        if (query.isBlank()) return@withContext emptyList()
-        try {
-            val raw = client.get("$PUBLIC_API_URL/search/album") {
-                header(HttpHeaders.UserAgent, USER_AGENT)
-                parameter("q", query)
-                parameter("limit", limit)
-            }.bodyAsText()
-            val data = json.parseToJsonElement(raw).jsonObject["data"] as? JsonArray ?: return@withContext emptyList()
-            data.mapNotNull { (it as? JsonObject)?.let(::mapAlbumToBrowseItem) }.take(limit)
-        } catch (e: Exception) {
-            Log.e(TAG, "Deezer album search failed for '$query'", e)
-            emptyList()
-        }
-    }
-
-    suspend fun searchArtists(query: String, limit: Int = 10): List<BrowseItem> = withContext(Dispatchers.IO) {
-        if (query.isBlank()) return@withContext emptyList()
-        try {
-            val raw = client.get("$PUBLIC_API_URL/search/artist") {
-                header(HttpHeaders.UserAgent, USER_AGENT)
-                parameter("q", query)
-                parameter("limit", limit)
-            }.bodyAsText()
-            val data = json.parseToJsonElement(raw).jsonObject["data"] as? JsonArray ?: return@withContext emptyList()
-            data.mapNotNull { (it as? JsonObject)?.let(::mapArtistToBrowseItem) }.take(limit)
-        } catch (e: Exception) {
-            Log.e(TAG, "Deezer artist search failed for '$query'", e)
-            emptyList()
-        }
-    }
-
-    suspend fun searchPlaylists(query: String, limit: Int = 10): List<BrowseItem> = withContext(Dispatchers.IO) {
-        if (query.isBlank()) return@withContext emptyList()
-        try {
-            val raw = client.get("$PUBLIC_API_URL/search/playlist") {
-                header(HttpHeaders.UserAgent, USER_AGENT)
-                parameter("q", query)
-                parameter("limit", limit)
-            }.bodyAsText()
-            val data = json.parseToJsonElement(raw).jsonObject["data"] as? JsonArray ?: return@withContext emptyList()
-            data.mapNotNull { (it as? JsonObject)?.let(::mapPlaylistToBrowseItem) }.take(limit)
-        } catch (e: Exception) {
-            Log.e(TAG, "Deezer playlist search failed for '$query'", e)
-            emptyList()
-        }
-    }
-
-    suspend fun getAlbumDetails(albumId: String): DetailPage? = withContext(Dispatchers.IO) {
-        try {
-            val cleanId = extractTrackId(albumId)
-            val raw = client.get("$PUBLIC_API_URL/album/$cleanId") {
-                header(HttpHeaders.UserAgent, USER_AGENT)
-            }.bodyAsText()
-            parseAlbumDetailsResponse(raw, cleanId)
-        } catch (e: Exception) {
-            Log.e(TAG, "Deezer getAlbumDetails failed for $albumId", e)
-            null
-        }
-    }
-
-    suspend fun getPlaylistDetails(playlistId: String): DetailPage? = withContext(Dispatchers.IO) {
-        try {
-            val cleanId = extractTrackId(playlistId)
-            val raw = client.get("$PUBLIC_API_URL/playlist/$cleanId") {
-                header(HttpHeaders.UserAgent, USER_AGENT)
-            }.bodyAsText()
-            parsePlaylistDetailsResponse(raw, cleanId)
-        } catch (e: Exception) {
-            Log.e(TAG, "Deezer getPlaylistDetails failed for $playlistId", e)
-            null
-        }
-    }
-
-    suspend fun getArtistDetails(artistId: String): ArtistPage? = withContext(Dispatchers.IO) {
-        try {
-            val cleanId = extractTrackId(artistId)
-            val artistRaw = client.get("$PUBLIC_API_URL/artist/$cleanId") {
-                header(HttpHeaders.UserAgent, USER_AGENT)
-            }.bodyAsText()
-            val topRaw = runCatching {
-                client.get("$PUBLIC_API_URL/artist/$cleanId/top") {
-                    header(HttpHeaders.UserAgent, USER_AGENT)
-                    parameter("limit", 10)
-                }.bodyAsText()
-            }.getOrNull()
-            val albumsRaw = runCatching {
-                client.get("$PUBLIC_API_URL/artist/$cleanId/albums") {
-                    header(HttpHeaders.UserAgent, USER_AGENT)
-                    parameter("limit", 25)
-                }.bodyAsText()
-            }.getOrNull()
-            parseArtistDetailsResponse(artistRaw, topRaw, albumsRaw)
-        } catch (e: Exception) {
-            Log.e(TAG, "Deezer getArtistDetails failed for $artistId", e)
-            null
         }
     }
 }

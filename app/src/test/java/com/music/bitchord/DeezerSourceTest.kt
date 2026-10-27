@@ -11,8 +11,6 @@ import com.music.bitchord.data.deezer.DeezerCipher
 import com.music.bitchord.data.deezer.DeezerQuality
 import com.music.bitchord.data.deezer.DeezerService
 import com.music.bitchord.data.deezer.DeezerTier
-import com.music.bitchord.data.model.BrowseType
-import com.music.bitchord.data.model.UiState
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.AudioQuality
 import com.music.bitchord.data.settings.permits
@@ -353,65 +351,6 @@ class DeezerSourceTest {
         assertEquals("27", songs[0].artistId)
         assertEquals("dz:101", songs[1].videoId)
         assertEquals(false, songs[1].isExplicit)
-    }
-
-    @Test
-    fun `maps album, playlist, and artist details to BitChord domain models`() {
-        val albumRaw = """
-            {
-              "id": 302127,
-              "title": "Discovery",
-              "cover_xl": "https://cdn-images.dzcdn.net/images/cover/disc/1000x1000.jpg",
-              "artist": { "id": 27, "name": "Daft Punk" },
-              "tracks": {
-                "data": [
-                  {
-                    "id": 3135553,
-                    "title": "One More Time",
-                    "duration": 320,
-                    "explicit_lyrics": false,
-                    "artist": { "id": 27, "name": "Daft Punk" }
-                  }
-                ]
-              }
-            }
-        """.trimIndent()
-        val albumPage = DeezerService.parseAlbumDetailsResponse(albumRaw)
-        assertNotNull(albumPage)
-        assertEquals("302127", albumPage!!.browseId)
-        assertEquals("Discovery", albumPage.title)
-        assertEquals("Daft Punk", albumPage.subtitle)
-        assertEquals(BrowseType.ALBUM, albumPage.type)
-        val albumSongs = (albumPage.songs as UiState.Success).data
-        assertEquals(1, albumSongs.size)
-        assertEquals("One More Time", albumSongs[0].title)
-        assertEquals("Discovery", albumSongs[0].albumName)
-        assertEquals("5:20", albumSongs[0].durationText)
-
-        val artistRaw = """
-            {
-              "id": 27,
-              "name": "Daft Punk",
-              "picture_xl": "https://cdn-images.dzcdn.net/images/artist/dp/1000x1000.jpg"
-            }
-        """.trimIndent()
-        val albumsRaw = """
-            {
-              "data": [
-                {
-                  "id": 302127,
-                  "title": "Discovery",
-                  "release_date": "2001-03-07",
-                  "cover_xl": "https://cdn-images.dzcdn.net/images/cover/disc/1000x1000.jpg"
-                }
-              ]
-            }
-        """.trimIndent()
-        val artistPage = DeezerService.parseArtistDetailsResponse(artistRaw, null, albumsRaw)
-        assertNotNull(artistPage)
-        assertEquals("Daft Punk", artistPage!!.name)
-        assertEquals(1, artistPage.sections.size)
-        assertEquals("2001", artistPage.sections[0].items[0].subtitle)
     }
 
     @Test
