@@ -170,13 +170,8 @@ object Downloader {
         sink: OutputStream,
         onProgress: (written: Long, total: Long) -> Unit,
     ): Long = withContext(Dispatchers.IO) {
-        val deezerTrackId = headers.entries
-            .firstOrNull { it.key.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true) }
-            ?.value
-            ?.takeIf { it.isNotBlank() }
-        val outboundHeaders = headers.filterKeys {
-            !it.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true)
-        }
+        val deezerTrackId = DeezerCipher.extractTrackId(headers)
+        val outboundHeaders = DeezerCipher.stripTrackHeader(headers)
         val request = Request.Builder().url(url)
             .apply { outboundHeaders.forEach { (name, value) -> header(name, value) } }
             .build()
@@ -231,13 +226,8 @@ object Downloader {
         format: StreamFormat,
     ): Boolean = withContext(Dispatchers.IO) {
         runCatching {
-            val deezerTrackId = headers.entries
-                .firstOrNull { it.key.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true) }
-                ?.value
-                ?.takeIf { it.isNotBlank() }
-            val outboundHeaders = headers.filterKeys {
-                !it.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true)
-            }
+            val deezerTrackId = DeezerCipher.extractTrackId(headers)
+            val outboundHeaders = DeezerCipher.stripTrackHeader(headers)
             val probeEnd = if (deezerTrackId != null) DeezerCipher.CHUNK_SIZE - 1 else 31
             val request = Request.Builder().url(url)
                 .header("Range", "bytes=0-$probeEnd")
@@ -249,9 +239,10 @@ object Downloader {
                 if ("mpegurl" in type || "vnd.apple.mpegurl" in type) return@use false
                 val rawHead = response.body?.byteStream()?.readNBytes(probeEnd + 1) ?: return@use false
                 val head = if (deezerTrackId != null) {
-                    DeezerCipher.decryptStream(rawHead, deezerTrackId).let {
-                        if (it.size > 32) it.copyOfRange(0, 32) else it
+                    if (rawHead.size == DeezerCipher.CHUNK_SIZE) {
+                        DeezerCipher.decryptChunkInPlace(DeezerCipher.deriveKey(deezerTrackId), rawHead)
                     }
+                    rawHead
                 } else {
                     rawHead
                 }

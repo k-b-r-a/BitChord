@@ -8,6 +8,8 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import com.music.bitchord.data.deezer.DeezerCipher
+import javax.crypto.Cipher
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Media3 [DataSource] that transparently decrypts Deezer `BF_CBC_STRIPE` streams on the fly.
@@ -33,7 +35,8 @@ class DeezerDataSource(
     }
 
     private var passthrough: Boolean = true
-    private var key: ByteArray? = null
+    private var secretKey: SecretKeySpec? = null
+    private var cipher: Cipher? = null
     private val chunkBuffer = ByteArray(DeezerCipher.CHUNK_SIZE)
     private var chunkIndex: Long = 0L
     private var pendingSkip: Int = 0
@@ -47,18 +50,19 @@ class DeezerDataSource(
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        val trackId = dataSpec.httpRequestHeaders.entries
-            .firstOrNull { it.key.equals(DeezerCipher.HEADER_TRACK_ID, true) }?.value?.trim()?.takeIf { it.isNotEmpty() }
+        val trackId = DeezerCipher.extractTrackId(dataSpec.httpRequestHeaders)
             ?: runCatching { dataSpec.uri.getQueryParameter("dz_tid")?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
 
         if (trackId == null) {
             passthrough = true
-            key = null
+            secretKey = null
+            cipher = null
             return upstream.open(dataSpec)
         }
 
         passthrough = false
-        key = DeezerCipher.deriveKey(trackId)
+        secretKey = SecretKeySpec(DeezerCipher.deriveKey(trackId), "Blowfish")
+        cipher = DeezerCipher.createCipher()
 
         val requestedStart = dataSpec.position.coerceAtLeast(0L)
         val alignedStart = (requestedStart / DeezerCipher.CHUNK_SIZE) * DeezerCipher.CHUNK_SIZE
@@ -70,7 +74,7 @@ class DeezerDataSource(
         chunkLimit = 0
         upstreamEof = false
 
-        val cleanHeaders = dataSpec.httpRequestHeaders.filterKeys { !it.equals(DeezerCipher.HEADER_TRACK_ID, true) }
+        val cleanHeaders = DeezerCipher.stripTrackHeader(dataSpec.httpRequestHeaders)
         val upstreamSpec = dataSpec.buildUpon()
             .setPosition(alignedStart)
             .setLength(C.LENGTH_UNSET.toLong())
@@ -118,7 +122,8 @@ class DeezerDataSource(
     }
 
     private fun fillNextChunk(): Boolean {
-        val activeKey = key ?: return false
+        val activeKey = secretKey ?: return false
+        val activeCipher = cipher ?: return false
         while (!upstreamEof) {
             var total = 0
             while (total < DeezerCipher.CHUNK_SIZE) {
@@ -127,7 +132,9 @@ class DeezerDataSource(
                 if (n > 0) total += n
             }
             if (total == 0) return false
-            if (DeezerCipher.isEncryptedChunk(chunkIndex++, total)) DeezerCipher.decryptChunkInPlace(activeKey, chunkBuffer, 0)
+            if (DeezerCipher.isEncryptedChunk(chunkIndex++, total)) {
+                DeezerCipher.decryptChunkInPlace(activeCipher, activeKey, chunkBuffer, 0)
+            }
             val skip = pendingSkip.coerceAtMost(total)
             pendingSkip -= skip
             chunkPos = skip
@@ -142,7 +149,8 @@ class DeezerDataSource(
     override fun getResponseHeaders(): Map<String, List<String>> = upstream.responseHeaders
 
     override fun close() {
-        key = null
+        secretKey = null
+        cipher = null
         chunkPos = 0
         chunkLimit = 0
         upstreamEof = false

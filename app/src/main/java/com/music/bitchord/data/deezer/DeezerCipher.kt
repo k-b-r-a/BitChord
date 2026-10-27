@@ -20,6 +20,7 @@ object DeezerCipher {
 
     private const val SECRET = "g4el58wc0zvf9na1"
     private val IV = byteArrayOf(0, 1, 2, 3, 4, 5, 6, 7)
+    val IV_SPEC = IvParameterSpec(IV)
 
     /**
      * Derives the 16-byte Blowfish key for a given Deezer `trackId` (`SNG_ID`).
@@ -39,6 +40,13 @@ object DeezerCipher {
         }
     }
 
+    fun extractTrackId(headers: Map<String, String>): String? =
+        headers.entries.firstOrNull { it.key.equals(HEADER_TRACK_ID, ignoreCase = true) }
+            ?.value?.trim()?.takeIf { it.isNotEmpty() }
+
+    fun stripTrackHeader(headers: Map<String, String>): Map<String, String> =
+        headers.filterKeys { !it.equals(HEADER_TRACK_ID, ignoreCase = true) }
+
     /**
      * Only full 2048-byte chunks at indices `0, 3, 6, 9, ...` are encrypted.
      * Trailing EOF chunks shorter than 2048 bytes are left unencrypted by Deezer.
@@ -46,18 +54,34 @@ object DeezerCipher {
     fun isEncryptedChunk(chunkIndex: Long, chunkLength: Int): Boolean =
         chunkIndex >= 0L && chunkIndex % CHUNK_STRIDE == 0L && chunkLength == CHUNK_SIZE
 
+    fun createCipher(): Cipher = Cipher.getInstance("Blowfish/CBC/NoPadding")
+
+    fun decryptChunkInPlace(
+        cipher: Cipher,
+        secretKey: SecretKeySpec,
+        buffer: ByteArray,
+        offset: Int = 0,
+    ) {
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, IV_SPEC)
+        cipher.doFinal(buffer, offset, CHUNK_SIZE, buffer, offset)
+    }
+
     fun decryptChunkInPlace(key: ByteArray, buffer: ByteArray, offset: Int = 0) {
-        val cipher = Cipher.getInstance("Blowfish/CBC/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "Blowfish"), IvParameterSpec(IV))
-        val plain = cipher.doFinal(buffer, offset, CHUNK_SIZE)
-        System.arraycopy(plain, 0, buffer, offset, CHUNK_SIZE)
+        decryptChunkInPlace(createCipher(), SecretKeySpec(key, "Blowfish"), buffer, offset)
+    }
+
+    fun encryptChunkInPlace(
+        cipher: Cipher,
+        secretKey: SecretKeySpec,
+        buffer: ByteArray,
+        offset: Int = 0,
+    ) {
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey, IV_SPEC)
+        cipher.doFinal(buffer, offset, CHUNK_SIZE, buffer, offset)
     }
 
     fun encryptChunkInPlace(key: ByteArray, buffer: ByteArray, offset: Int = 0) {
-        val cipher = Cipher.getInstance("Blowfish/CBC/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "Blowfish"), IvParameterSpec(IV))
-        val encrypted = cipher.doFinal(buffer, offset, CHUNK_SIZE)
-        System.arraycopy(encrypted, 0, buffer, offset, CHUNK_SIZE)
+        encryptChunkInPlace(createCipher(), SecretKeySpec(key, "Blowfish"), buffer, offset)
     }
 
     /**
@@ -77,7 +101,8 @@ object DeezerCipher {
         trackId: String,
         startOffset: Long = 0L,
     ) : InputStream() {
-        private val key = deriveKey(trackId)
+        private val secretKey = SecretKeySpec(deriveKey(trackId), "Blowfish")
+        private val cipher = createCipher()
         private val chunkBuffer = ByteArray(CHUNK_SIZE)
         private var chunkIndex: Long = (startOffset.coerceAtLeast(0L)) / CHUNK_SIZE
         private var pendingSkip: Int = ((startOffset.coerceAtLeast(0L)) % CHUNK_SIZE).toInt()
@@ -94,7 +119,9 @@ object DeezerCipher {
                     if (n > 0) total += n
                 }
                 if (total == 0) return false
-                if (isEncryptedChunk(chunkIndex++, total)) decryptChunkInPlace(key, chunkBuffer, 0)
+                if (isEncryptedChunk(chunkIndex++, total)) {
+                    decryptChunkInPlace(cipher, secretKey, chunkBuffer, 0)
+                }
                 val skip = pendingSkip.coerceAtMost(total)
                 pendingSkip -= skip
                 chunkPos = skip
