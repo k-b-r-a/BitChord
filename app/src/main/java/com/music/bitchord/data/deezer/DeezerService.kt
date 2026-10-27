@@ -268,16 +268,13 @@ object DeezerService {
 
         val sid = results["SESSION_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: results["SESSION"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: cookieSid?.takeIf { it.isNotBlank() }
-            ?: ""
+            ?: cookieSid.orEmpty()
 
         val apiToken = results["checkForm"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: results["CHECKFORM"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: fallbackApiToken
 
-        val optionsObj = (userObj["OPTIONS"] as? JsonObject)
-            ?: (results["OPTIONS"] as? JsonObject)
-
+        val optionsObj = (userObj["OPTIONS"] as? JsonObject) ?: (results["OPTIONS"] as? JsonObject)
         val licenseToken = optionsObj?.get("license_token")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: results["PLAYER_TOKEN"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: fallbackLicenseToken
@@ -286,12 +283,8 @@ object DeezerService {
             ?: userObj["FIRSTNAME"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: "Deezer #$userId"
 
-        val canLossless = optionsObj.boolFlag("web_lossless") ||
-            optionsObj.boolFlag("mobile_lossless")
-        val canHq = canLossless ||
-            optionsObj.boolFlag("web_hq") ||
-            optionsObj.boolFlag("mobile_hq")
-
+        val canLossless = optionsObj.boolFlag("web_lossless") || optionsObj.boolFlag("mobile_lossless")
+        val canHq = canLossless || optionsObj.boolFlag("web_hq") || optionsObj.boolFlag("mobile_hq")
         val tier = when {
             canLossless -> DeezerTier.HIFI
             canHq -> DeezerTier.PREMIUM
@@ -299,17 +292,7 @@ object DeezerService {
         }
 
         return DeezerAuthResult.Authenticated(
-            DeezerSession(
-                arl = cleanArl,
-                sid = sid,
-                apiToken = apiToken,
-                licenseToken = licenseToken,
-                userId = userId,
-                userName = userName,
-                tier = tier,
-                canStreamLossless = canLossless,
-                canStreamHq = canHq,
-            )
+            DeezerSession(cleanArl, sid, apiToken, licenseToken, userId, userName, tier, canLossless, canHq)
         )
     }
 
@@ -363,59 +346,31 @@ object DeezerService {
                 cookieSid = cookieSid,
             )
 
-            // Fallback to deezer.page.getUserData if getUserData returned incomplete tokens
-            if (result is DeezerAuthResult.Authenticated &&
-                (result.session.licenseToken.isBlank() || result.session.apiToken.isBlank())
-            ) {
-                val baseSession = result.session
+            // Fallback to deezer.page.getUserData if tokens are incomplete
+            if (result is DeezerAuthResult.Authenticated && (result.session.licenseToken.isBlank() || result.session.apiToken.isBlank())) {
+                val base = result.session
                 val (pageRaw, pageCookieSid) = runCatching {
-                    executeGatewayCall(
-                        method = "deezer.page.getUserData",
-                        apiToken = baseSession.apiToken.ifBlank { "null" },
-                        sid = baseSession.sid.ifBlank { cookieSid },
-                        arl = cleanArl,
-                    )
+                    executeGatewayCall("deezer.page.getUserData", base.apiToken.ifBlank { "null" }, base.sid.ifBlank { cookieSid }, cleanArl)
                 }.getOrNull() ?: ("" to null)
                 if (pageRaw.isNotBlank()) {
-                    val pageResult = parseUserDataSession(
-                        rawJson = pageRaw,
-                        arl = cleanArl,
-                        cookieSid = pageCookieSid ?: baseSession.sid,
-                        fallbackApiToken = baseSession.apiToken,
-                        fallbackLicenseToken = baseSession.licenseToken,
-                    )
-                    if (pageResult is DeezerAuthResult.Authenticated) {
-                        result = pageResult
-                    }
+                    val pageRes = parseUserDataSession(pageRaw, cleanArl, pageCookieSid ?: base.sid, base.apiToken, base.licenseToken)
+                    if (pageRes is DeezerAuthResult.Authenticated) result = pageRes
                 }
             }
 
             // Ping fallback if sid is still blank
             if (result is DeezerAuthResult.Authenticated && result.session.sid.isBlank()) {
-                val baseSession = result.session
+                val base = result.session
                 val (pingRaw, pingCookieSid) = runCatching {
-                    executeGatewayCall(
-                        method = "deezer.ping",
-                        apiToken = baseSession.apiToken.ifBlank { "null" },
-                        sid = null,
-                        arl = cleanArl,
-                    )
+                    executeGatewayCall("deezer.ping", base.apiToken.ifBlank { "null" }, null, cleanArl)
                 }.getOrNull() ?: ("" to null)
                 if (pingRaw.isNotBlank()) {
-                    val pingResult = parseUserDataSession(
-                        rawJson = pingRaw,
-                        arl = cleanArl,
-                        cookieSid = pingCookieSid,
-                        fallbackApiToken = baseSession.apiToken,
-                        fallbackLicenseToken = baseSession.licenseToken,
-                    )
-                    if (pingResult is DeezerAuthResult.Authenticated) {
-                        result = DeezerAuthResult.Authenticated(
-                            baseSession.copy(
-                                sid = pingResult.session.sid.ifBlank { baseSession.sid },
-                                apiToken = pingResult.session.apiToken.ifBlank { baseSession.apiToken },
-                            )
-                        )
+                    val pingRes = parseUserDataSession(pingRaw, cleanArl, pingCookieSid, base.apiToken, base.licenseToken)
+                    if (pingRes is DeezerAuthResult.Authenticated) {
+                        result = DeezerAuthResult.Authenticated(base.copy(
+                            sid = pingRes.session.sid.ifBlank { base.sid },
+                            apiToken = pingRes.session.apiToken.ifBlank { base.apiToken },
+                        ))
                     }
                 }
             }
@@ -531,10 +486,7 @@ object DeezerService {
      * Returns the ordered list of [DeezerQuality] formats to request for a given account [tier]
      * and playback [request] (`FLAC` -> `MP3_320` -> `MP3_128`).
      */
-    fun orderedFormatsFor(
-        tier: DeezerTier,
-        request: StreamRequest,
-    ): List<DeezerQuality> = when (request) {
+    fun orderedFormatsFor(tier: DeezerTier, request: StreamRequest): List<DeezerQuality> = when (request) {
         StreamRequest.Lossless -> when (tier) {
             DeezerTier.HIFI -> listOf(DeezerQuality.FLAC, DeezerQuality.MP3_320, DeezerQuality.MP3_128)
             DeezerTier.PREMIUM -> listOf(DeezerQuality.MP3_320, DeezerQuality.MP3_128)
@@ -545,10 +497,7 @@ object DeezerService {
             DeezerTier.FREE -> listOf(DeezerQuality.MP3_128)
         }
         is StreamRequest.Capped -> when {
-            request.maxKbps >= 320 -> when (tier) {
-                DeezerTier.HIFI, DeezerTier.PREMIUM -> listOf(DeezerQuality.MP3_320, DeezerQuality.MP3_128)
-                DeezerTier.FREE -> listOf(DeezerQuality.MP3_128)
-            }
+            request.maxKbps >= 320 && tier != DeezerTier.FREE -> listOf(DeezerQuality.MP3_320, DeezerQuality.MP3_128)
             else -> listOf(DeezerQuality.MP3_128)
         }
     }
@@ -559,35 +508,20 @@ object DeezerService {
         formats: List<DeezerQuality>,
     ): JsonObject = buildJsonObject {
         put("license_token", licenseToken)
-        put(
-            "media",
-            buildJsonArray {
-                add(
-                    buildJsonObject {
-                        put("type", "FULL")
-                        put(
-                            "formats",
-                            buildJsonArray {
-                                for (fmt in formats) {
-                                    add(
-                                        buildJsonObject {
-                                            put("cipher", "BF_CBC_STRIPE")
-                                            put("format", fmt.code)
-                                        }
-                                    )
-                                }
-                            }
-                        )
+        put("media", buildJsonArray {
+            add(buildJsonObject {
+                put("type", "FULL")
+                put("formats", buildJsonArray {
+                    for (fmt in formats) {
+                        add(buildJsonObject {
+                            put("cipher", "BF_CBC_STRIPE")
+                            put("format", fmt.code)
+                        })
                     }
-                )
-            }
-        )
-        put(
-            "track_tokens",
-            buildJsonArray {
-                add(JsonPrimitive(trackToken))
-            }
-        )
+                })
+            })
+        })
+        put("track_tokens", buildJsonArray { add(JsonPrimitive(trackToken)) })
     }
 
     /**
@@ -605,40 +539,24 @@ object DeezerService {
         val root = runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull() ?: return null
         val dataArr = root["data"] as? JsonArray ?: return null
 
-        data class Candidate(
-            val quality: DeezerQuality,
-            val url: String,
-            val encrypted: Boolean,
-        )
-
+        data class Candidate(val quality: DeezerQuality, val url: String, val encrypted: Boolean)
         val candidates = mutableListOf<Candidate>()
         for (dataElem in dataArr) {
-            val dataObj = dataElem as? JsonObject ?: continue
-            val mediaArr = dataObj["media"] as? JsonArray ?: continue
+            val mediaArr = (dataElem as? JsonObject)?.get("media") as? JsonArray ?: continue
             for (mediaElem in mediaArr) {
                 val mediaObj = mediaElem as? JsonObject ?: continue
-                val mediaType = mediaObj["media_type"]?.jsonPrimitive?.content
-                if (mediaType != null && mediaType.equals("PREVIEW", ignoreCase = true)) {
-                    continue
-                }
-                val formatStr = mediaObj["format"]?.jsonPrimitive?.content ?: continue
+                if (mediaObj["media_type"]?.jsonPrimitive?.content.equals("PREVIEW", ignoreCase = true)) continue
                 val quality = DeezerQuality.entries.firstOrNull {
-                    it.code.equals(formatStr, ignoreCase = true)
+                    it.code.equals(mediaObj["format"]?.jsonPrimitive?.content, ignoreCase = true)
                 } ?: continue
-
-                val cipherType = (mediaObj["cipher"] as? JsonObject)
-                    ?.get("type")?.jsonPrimitive?.content
+                val cipherType = (mediaObj["cipher"] as? JsonObject)?.get("type")?.jsonPrimitive?.content
                 val encrypted = cipherType == null || cipherType.equals("BF_CBC_STRIPE", ignoreCase = true)
-
-                val sourcesArr = mediaObj["sources"] as? JsonArray ?: continue
-                val sourceUrl = sourcesArr.firstNotNullOfOrNull { srcElem ->
-                    (srcElem as? JsonObject)?.get("url")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+                val sourceUrl = (mediaObj["sources"] as? JsonArray)?.firstNotNullOfOrNull {
+                    (it as? JsonObject)?.get("url")?.jsonPrimitive?.content?.takeIf { u -> u.isNotBlank() }
                 } ?: continue
-
-                candidates.add(Candidate(quality = quality, url = sourceUrl, encrypted = encrypted))
+                candidates.add(Candidate(quality, sourceUrl, encrypted))
             }
         }
-
         if (candidates.isEmpty()) return null
 
         val priorityOrder = (requestedFormats + DeezerQuality.entries).distinct()
@@ -649,11 +567,7 @@ object DeezerService {
         val belowRequest = when (originalRequest) {
             StreamRequest.Lossless -> chosen.quality != DeezerQuality.FLAC
             StreamRequest.Best -> chosen.quality != DeezerQuality.MP3_320 && chosen.quality != DeezerQuality.FLAC
-            is StreamRequest.Capped -> {
-                val deliveredKbps = chosen.quality.kbps ?: Int.MAX_VALUE
-                val targetFloor = if (originalRequest.maxKbps >= 320) 320 else 128
-                deliveredKbps < targetFloor
-            }
+            is StreamRequest.Capped -> (chosen.quality.kbps ?: Int.MAX_VALUE) < if (originalRequest.maxKbps >= 320) 320 else 128
         }
 
         return ResolvedDeezerStream(
@@ -666,16 +580,9 @@ object DeezerService {
         )
     }
 
-    internal data class TrackTokenMeta(
-        val trackToken: String,
-        val trackId: String,
-        val durationSec: Int?,
-    )
+    internal data class TrackTokenMeta(val trackToken: String, val trackId: String, val durationSec: Int?)
 
-    internal fun extractTrackTokenAndId(
-        gatewayRoot: JsonObject?,
-        requestedTrackId: String,
-    ): TrackTokenMeta? {
+    internal fun extractTrackTokenAndId(gatewayRoot: JsonObject?, requestedTrackId: String): TrackTokenMeta? {
         val results = gatewayRoot?.get("results") as? JsonObject ?: return null
         val songObj = when {
             results["TRACK_TOKEN"] != null -> results
@@ -683,22 +590,11 @@ object DeezerService {
             results["data"] is JsonArray -> (results["data"] as JsonArray).firstOrNull() as? JsonObject
             else -> null
         } ?: return null
-
-        val fallbackObj = songObj["FALLBACK"] as? JsonObject
-        val effectiveObj = if (fallbackObj?.get("TRACK_TOKEN")?.jsonPrimitive?.content?.isNotBlank() == true) {
-            fallbackObj
-        } else {
-            songObj
-        }
-
-        val token = effectiveObj["TRACK_TOKEN"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: songObj["TRACK_TOKEN"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-        val sngId = effectiveObj["SNG_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: songObj["SNG_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: requestedTrackId
-        val durationSec = effectiveObj["DURATION"]?.jsonPrimitive?.intOrNull
-            ?: songObj["DURATION"]?.jsonPrimitive?.intOrNull
+        val effective = (songObj["FALLBACK"] as? JsonObject)
+            ?.takeIf { it["TRACK_TOKEN"]?.jsonPrimitive?.content?.isNotBlank() == true } ?: songObj
+        val token = effective["TRACK_TOKEN"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
+        val sngId = effective["SNG_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: requestedTrackId
+        val durationSec = effective["DURATION"]?.jsonPrimitive?.intOrNull ?: songObj["DURATION"]?.jsonPrimitive?.intOrNull
         return TrackTokenMeta(token, sngId, durationSec)
     }
 
@@ -788,48 +684,33 @@ object DeezerService {
 
     // ─── Catalog & Metadata Mapping ──────────────────────────────────────────────
 
-    private fun coverUrlFromPictureId(pictureId: String?, category: String = CDN_COVER_BASE): String? {
+    private fun coverUrlFromPictureId(pictureId: String?): String? {
         val clean = pictureId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        if (clean.startsWith("http://") || clean.startsWith("https://")) return clean
-        return "$category/$clean/500x500-000000-80-0-0.jpg"
+        return if (clean.startsWith("http")) clean else "$CDN_COVER_BASE/$clean/500x500-000000-80-0-0.jpg"
     }
 
     /**
      * Maps either a Deezer Public API track object or a Gateway `SNG_*` track object to [Song].
      */
-    fun mapTrackToSong(
-        item: JsonObject,
-        sourceQuality: String = "LOSSLESS",
-    ): Song? {
+    fun mapTrackToSong(item: JsonObject, sourceQuality: String = "LOSSLESS"): Song? {
         val rawId = item["SNG_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
-
+            ?: item["id"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
         val baseTitle = item["SNG_TITLE"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: item["title"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: return null
+            ?: item["title"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
         val version = item["VERSION"]?.jsonPrimitive?.content?.trim().orEmpty()
-        val title = if (version.isNotEmpty() && !baseTitle.contains(version, ignoreCase = true)) {
-            "$baseTitle $version"
-        } else {
-            baseTitle
+        val title = if (version.isNotEmpty() && !baseTitle.contains(version, true)) "$baseTitle $version" else baseTitle
+
+        val artistsList = (item["ARTISTS"] as? JsonArray)?.mapNotNull {
+            (it as? JsonObject)?.get("ART_NAME")?.jsonPrimitive?.content?.takeIf { n -> n.isNotBlank() }
+        } ?: (item["contributors"] as? JsonArray)?.mapNotNull {
+            (it as? JsonObject)?.get("name")?.jsonPrimitive?.content?.takeIf { n -> n.isNotBlank() }
         }
 
-        val artistsList = (item["ARTISTS"] as? JsonArray)?.mapNotNull { artElem ->
-            (artElem as? JsonObject)?.get("ART_NAME")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-        }?.takeIf { it.isNotEmpty() }
-            ?: (item["contributors"] as? JsonArray)?.mapNotNull { contrib ->
-                (contrib as? JsonObject)?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            }?.takeIf { it.isNotEmpty() }
-
         val artistObj = item["artist"] as? JsonObject
-        val artistName = artistsList?.joinToString(", ")
+        val artistName = artistsList?.takeIf { it.isNotEmpty() }?.joinToString(", ")
             ?: item["ART_NAME"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: artistObj?.get("name")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: "Unknown Artist"
-
-        val primaryArtistId = item["ART_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-            ?: artistObj?.get("id")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
 
         val albumObj = item["album"] as? JsonObject
         val albumName = item["ALB_TITLE"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
@@ -842,21 +723,10 @@ object DeezerService {
             ?: albumObj?.get("cover_medium")?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
             ?: coverUrlFromPictureId(item["ALB_PICTURE"]?.jsonPrimitive?.content)
 
-        val durationSec = item["DURATION"]?.jsonPrimitive?.longOrNull
-            ?: item["duration"]?.jsonPrimitive?.longOrNull
-            ?: 0L
-        val durationText = if (durationSec > 0L) {
-            val min = durationSec / 60L
-            val sec = (durationSec % 60L).toString().padStart(2, '0')
-            "$min:$sec"
-        } else {
-            null
-        }
-
-        val explicit = when (val exp = item["EXPLICIT_LYRICS"] ?: item["explicit_lyrics"]) {
-            is JsonPrimitive -> exp.booleanOrNull == true || exp.content == "1" || exp.content == "4"
-            else -> false
-        }
+        val durationSec = item["DURATION"]?.jsonPrimitive?.longOrNull ?: item["duration"]?.jsonPrimitive?.longOrNull ?: 0L
+        val durationText = if (durationSec > 0L) "${durationSec / 60L}:${(durationSec % 60L).toString().padStart(2, '0')}" else null
+        val exp = item["EXPLICIT_LYRICS"] ?: item["explicit_lyrics"]
+        val explicit = exp is JsonPrimitive && (exp.booleanOrNull == true || exp.content == "1" || exp.content == "4")
 
         return Song(
             videoId = if (rawId.startsWith("dz:")) rawId else "dz:$rawId",
@@ -864,7 +734,7 @@ object DeezerService {
             artist = artistName,
             thumbnailUrl = coverUrl,
             durationText = durationText,
-            artistId = primaryArtistId,
+            artistId = item["ART_ID"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: artistObj?.get("id")?.jsonPrimitive?.content,
             albumId = albumId,
             albumName = albumName,
             sourceQuality = sourceQuality,
@@ -878,8 +748,7 @@ object DeezerService {
             ?: ((root["results"] as? JsonObject)?.get("data") as? JsonArray)
             ?: (((root["results"] as? JsonObject)?.get("TRACK") as? JsonObject)?.get("data") as? JsonArray)
             ?: return emptyList()
-        val mapped = dataArray.mapNotNull { elem -> (elem as? JsonObject)?.let(::mapTrackToSong) }
-        return prioritizeDeezerExplicit(mapped)
+        return prioritizeDeezerExplicit(dataArray.mapNotNull { (it as? JsonObject)?.let(::mapTrackToSong) })
     }
 
     suspend fun searchTracks(query: String, limit: Int = 10): List<Song> = withContext(Dispatchers.IO) {
@@ -894,12 +763,10 @@ object DeezerService {
                     put("suggest", false)
                     put("artist_suggest", false)
                     put("top_tracks", false)
-                }
+                },
             )
             val gwSongs = gwRoot?.let { parseTrackSearchResponse(it.toString()) }.orEmpty()
-            if (gwSongs.isNotEmpty()) {
-                return@withContext gwSongs.take(limit)
-            }
+            if (gwSongs.isNotEmpty()) return@withContext gwSongs.take(limit)
 
             val raw = client.get("$PUBLIC_API_URL/search/track") {
                 header(HttpHeaders.UserAgent, USER_AGENT)
@@ -916,16 +783,8 @@ object DeezerService {
 
 internal fun prioritizeDeezerExplicit(songs: List<Song>): List<Song> {
     if (songs.size < 2) return songs
-    val explicitKeys = songs.asSequence()
-        .filter { it.isExplicit == true }
-        .map { deezerCanonicalKey(it) }
-        .toSet()
+    val explicitKeys = songs.filter { it.isExplicit == true }.map { it.title.lowercase().trim() to it.artist.lowercase().trim() }.toSet()
     if (explicitKeys.isEmpty()) return songs
-    val (preferred, demoted) = songs.partition { song ->
-        song.isExplicit == true || deezerCanonicalKey(song) !in explicitKeys
-    }
+    val (preferred, demoted) = songs.partition { it.isExplicit == true || (it.title.lowercase().trim() to it.artist.lowercase().trim()) !in explicitKeys }
     return preferred + demoted
 }
-
-private fun deezerCanonicalKey(s: Song): Pair<String, String> =
-    s.title.lowercase().trim() to s.artist.lowercase().trim()
