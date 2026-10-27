@@ -1974,21 +1974,9 @@ object AppSettings {
 
     /** Clears all stored Deezer credentials and profile metadata. */
     fun clearDeezer() {
-        deezerArl.value = ""
-        deezerSid.value = ""
-        deezerLicenseToken.value = ""
-        deezerUserName.value = ""
-        deezerTier.value = ""
-        if (this::authStore.isInitialized) {
-            authStore.deezerArl = null
-            authStore.deezerSid = null
-            authStore.deezerLicenseToken = null
-        }
+        setDeezerSessionInfo(arl = "", sid = "", licenseToken = "", userName = "", tier = "")
         if (this::prefs.isInitialized) {
-            prefs.edit()
-                .remove(KEY_DEEZER_USERNAME)
-                .remove(KEY_DEEZER_TIER)
-                .apply()
+            prefs.edit().remove(KEY_DEEZER_USERNAME).remove(KEY_DEEZER_TIER).apply()
         }
         com.music.bitchord.data.deezer.DeezerService.invalidateSession()
     }

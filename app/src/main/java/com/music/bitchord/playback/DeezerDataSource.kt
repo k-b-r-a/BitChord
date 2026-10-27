@@ -8,19 +8,11 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import com.music.bitchord.data.deezer.DeezerCipher
-import javax.crypto.Cipher
-import javax.crypto.spec.SecretKeySpec
+import java.io.InputStream
 
 /**
- * Media3 [DataSource] that transparently decrypts Deezer `BF_CBC_STRIPE` streams on the fly.
- *
- * Activated only when [DataSpec.httpRequestHeaders] contains [DeezerCipher.HEADER_TRACK_ID]
- * (or the URI contains query parameter `dz_tid`). All other streams pass through untouched.
- *
- * Handles arbitrary byte-range seeks (`dataSpec.position`) by aligning the upstream request
- * down to the nearest 2048-byte chunk boundary, assembling full 2048-byte chunks across
- * partial network reads, decrypting every 3rd chunk (`chunkIndex % 3 == 0`), and discarding
- * the pre-seek prefix bytes before delivering plaintext to the caller.
+ * Media3 [DataSource] that transparently decrypts Deezer `BF_CBC_STRIPE` streams on the fly
+ * by delegating chunk assembly and 2048-byte stride decryption to [DeezerCipher.DecryptingInputStream].
  */
 @OptIn(UnstableApi::class)
 class DeezerDataSource(
@@ -34,15 +26,7 @@ class DeezerDataSource(
             DeezerDataSource(upstreamFactory.createDataSource())
     }
 
-    private var passthrough: Boolean = true
-    private var secretKey: SecretKeySpec? = null
-    private var cipher: Cipher? = null
-    private val chunkBuffer = ByteArray(DeezerCipher.CHUNK_SIZE)
-    private var chunkIndex: Long = 0L
-    private var pendingSkip: Int = 0
-    private var chunkPos: Int = 0
-    private var chunkLimit: Int = 0
-    private var upstreamEof: Boolean = false
+    private var decryptingStream: DeezerCipher.DecryptingInputStream? = null
     private var bytesRemaining: Long = C.LENGTH_UNSET.toLong()
 
     override fun addTransferListener(transferListener: TransferListener) {
@@ -54,35 +38,26 @@ class DeezerDataSource(
             ?: runCatching { dataSpec.uri.getQueryParameter("dz_tid")?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
 
         if (trackId == null) {
-            passthrough = true
-            secretKey = null
-            cipher = null
+            decryptingStream = null
             return upstream.open(dataSpec)
         }
 
-        passthrough = false
-        secretKey = SecretKeySpec(DeezerCipher.deriveKey(trackId), "Blowfish")
-        cipher = DeezerCipher.createCipher()
-
         val requestedStart = dataSpec.position.coerceAtLeast(0L)
         val alignedStart = (requestedStart / DeezerCipher.CHUNK_SIZE) * DeezerCipher.CHUNK_SIZE
-        val skipInFirstChunk = (requestedStart - alignedStart).toInt()
+        val skipInFirstChunk = requestedStart - alignedStart
 
-        chunkIndex = alignedStart / DeezerCipher.CHUNK_SIZE
-        pendingSkip = skipInFirstChunk
-        chunkPos = 0
-        chunkLimit = 0
-        upstreamEof = false
-
-        val cleanHeaders = DeezerCipher.stripTrackHeader(dataSpec.httpRequestHeaders)
         val upstreamSpec = dataSpec.buildUpon()
             .setPosition(alignedStart)
             .setLength(C.LENGTH_UNSET.toLong())
-            .setHttpRequestHeaders(cleanHeaders)
+            .setHttpRequestHeaders(DeezerCipher.stripTrackHeader(dataSpec.httpRequestHeaders))
             .build()
 
         val upstreamLen = upstream.open(upstreamSpec)
-        val available = if (upstreamLen != C.LENGTH_UNSET.toLong()) (upstreamLen - skipInFirstChunk).coerceAtLeast(0L) else C.LENGTH_UNSET.toLong()
+        val available = if (upstreamLen != C.LENGTH_UNSET.toLong()) {
+            (upstreamLen - skipInFirstChunk).coerceAtLeast(0L)
+        } else {
+            C.LENGTH_UNSET.toLong()
+        }
 
         bytesRemaining = when {
             dataSpec.length != C.LENGTH_UNSET.toLong() && available != C.LENGTH_UNSET.toLong() -> minOf(dataSpec.length, available)
@@ -90,58 +65,29 @@ class DeezerDataSource(
             else -> available
         }
 
+        val upstreamInput = object : InputStream() {
+            override fun read(): Int = throw UnsupportedOperationException()
+            override fun read(b: ByteArray, off: Int, len: Int): Int =
+                upstream.read(b, off, len).let { if (it == C.RESULT_END_OF_INPUT) -1 else it }
+        }
+        decryptingStream = DeezerCipher.DecryptingInputStream(upstreamInput, trackId, requestedStart)
         return bytesRemaining
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
         if (length == 0) return 0
-        if (passthrough) {
-            return upstream.read(buffer, offset, length)
-        }
-        if (bytesRemaining == 0L) {
-            return C.RESULT_END_OF_INPUT
-        }
-
-        if (chunkPos >= chunkLimit && !fillNextChunk()) {
-            return C.RESULT_END_OF_INPUT
-        }
+        val stream = decryptingStream ?: return upstream.read(buffer, offset, length)
+        if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
 
         val maxDeliver = if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
             minOf(length.toLong(), bytesRemaining).toInt()
         } else {
             length
         }
-        val availableInChunk = chunkLimit - chunkPos
-        val toCopy = minOf(maxDeliver, availableInChunk)
-        System.arraycopy(chunkBuffer, chunkPos, buffer, offset, toCopy)
-        chunkPos += toCopy
-        if (bytesRemaining != C.LENGTH_UNSET.toLong()) {
-            bytesRemaining -= toCopy
-        }
-        return toCopy
-    }
-
-    private fun fillNextChunk(): Boolean {
-        val activeKey = secretKey ?: return false
-        val activeCipher = cipher ?: return false
-        while (!upstreamEof) {
-            var total = 0
-            while (total < DeezerCipher.CHUNK_SIZE) {
-                val n = upstream.read(chunkBuffer, total, DeezerCipher.CHUNK_SIZE - total)
-                if (n == C.RESULT_END_OF_INPUT) { upstreamEof = true; break }
-                if (n > 0) total += n
-            }
-            if (total == 0) return false
-            if (DeezerCipher.isEncryptedChunk(chunkIndex++, total)) {
-                DeezerCipher.decryptChunkInPlace(activeCipher, activeKey, chunkBuffer, 0)
-            }
-            val skip = pendingSkip.coerceAtMost(total)
-            pendingSkip -= skip
-            chunkPos = skip
-            chunkLimit = total
-            if (chunkPos < chunkLimit) return true
-        }
-        return false
+        val read = stream.read(buffer, offset, maxDeliver)
+        if (read < 0) return C.RESULT_END_OF_INPUT
+        if (bytesRemaining != C.LENGTH_UNSET.toLong()) bytesRemaining -= read
+        return read
     }
 
     override fun getUri(): Uri? = upstream.uri
@@ -149,11 +95,7 @@ class DeezerDataSource(
     override fun getResponseHeaders(): Map<String, List<String>> = upstream.responseHeaders
 
     override fun close() {
-        secretKey = null
-        cipher = null
-        chunkPos = 0
-        chunkLimit = 0
-        upstreamEof = false
+        decryptingStream = null
         bytesRemaining = C.LENGTH_UNSET.toLong()
         upstream.close()
     }

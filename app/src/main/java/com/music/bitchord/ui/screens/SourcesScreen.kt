@@ -68,7 +68,6 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.R
 import com.music.bitchord.auth.clearDeezerWebSession
-import com.music.bitchord.data.deezer.DeezerAuthResult
 import com.music.bitchord.data.deezer.DeezerService
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.permits
@@ -185,17 +184,21 @@ fun SourcesScreen(
         }
     }
 
-    LaunchedEffect(deezerArl, configs.firstOrNull { it.kind == SourceKind.DEEZER }?.id) {
-        val deezerConfig = configs.firstOrNull { it.kind == SourceKind.DEEZER } ?: return@LaunchedEffect
+    suspend fun refreshDeezerHealth() {
+        val dzConfig = configs.firstOrNull { it.kind == SourceKind.DEEZER } ?: return
         if (deezerArl.isBlank()) {
-            health.remove(deezerConfig.id)
-            return@LaunchedEffect
+            health.remove(dzConfig.id)
+            return
         }
-        val source = SourceRegistry.instance(deezerConfig.id) ?: return@LaunchedEffect
-        health[deezerConfig.id] = withContext(Dispatchers.IO) {
+        val source = SourceRegistry.instance(dzConfig.id) ?: return
+        health[dzConfig.id] = withContext(Dispatchers.IO) {
             runCatching { source.health() }
                 .getOrElse { SourceHealth.Unreachable(it.message ?: "Failed") }
         }
+    }
+
+    LaunchedEffect(deezerArl, configs.firstOrNull { it.kind == SourceKind.DEEZER }?.id) {
+        refreshDeezerHealth()
     }
 
     // The ceiling in force *right now*, which is the only one this screen can
@@ -334,24 +337,7 @@ fun SourcesScreen(
             validating = deezerValidating,
             onEditArl = onEditDeezerArl,
             onOpenBrowserLogin = onOpenDeezerLogin,
-            onRefreshSession = {
-                val dzConfig = configs.firstOrNull { it.kind == SourceKind.DEEZER }
-                if (deezerArl.isNotBlank()) {
-                    when (val res = DeezerService.validateArl(deezerArl, persistOnSuccess = true)) {
-                        is DeezerAuthResult.Authenticated -> {
-                            dzConfig?.let {
-                                health[it.id] = SourceHealth.Ok("${res.session.userName} · ${res.session.tier.label}")
-                            }
-                        }
-                        is DeezerAuthResult.InvalidToken -> {
-                            dzConfig?.let { health[it.id] = SourceHealth.Rejected(res.reason) }
-                        }
-                        is DeezerAuthResult.NetworkError -> {
-                            dzConfig?.let { health[it.id] = SourceHealth.Unreachable(res.reason) }
-                        }
-                    }
-                }
-            },
+            onRefreshSession = ::refreshDeezerHealth,
             onDisconnect = {
                 AppSettings.clearDeezer()
                 clearDeezerWebSession()

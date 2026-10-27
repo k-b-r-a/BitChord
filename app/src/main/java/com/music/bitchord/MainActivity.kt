@@ -5586,6 +5586,12 @@ private fun BitChordApp(
             )
         }
 
+        fun enableDeezerSource() {
+            SourceRegistry.configs.value
+                .firstOrNull { it.kind == SourceKind.DEEZER }
+                ?.let { SourceRegistry.setEnabled(it.id, true) }
+        }
+
         if (showDeezerArlDialog) {
             val deezerError by com.music.bitchord.data.deezer.DeezerService.authError.collectAsStateWithLifecycle()
             val deezerValidating by com.music.bitchord.data.deezer.DeezerService.validating.collectAsStateWithLifecycle()
@@ -5597,14 +5603,9 @@ private fun BitChordApp(
                 loading = deezerValidating,
                 onSave = {
                     scope.launch {
-                        val res = com.music.bitchord.data.deezer.DeezerService.validateArl(
-                            deezerArlInput,
-                            persistOnSuccess = true,
-                        )
+                        val res = com.music.bitchord.data.deezer.DeezerService.validateArl(deezerArlInput)
                         if (res is com.music.bitchord.data.deezer.DeezerAuthResult.Authenticated) {
-                            SourceRegistry.configs.value
-                                .firstOrNull { it.kind == SourceKind.DEEZER }
-                                ?.let { SourceRegistry.setEnabled(it.id, true) }
+                            enableDeezerSource()
                             showDeezerArlDialog = false
                         }
                     }
@@ -5621,9 +5622,7 @@ private fun BitChordApp(
             com.music.bitchord.auth.DeezerLoginScreen(
                 onCaptured = { arl ->
                     deezerArlInput = arl
-                    SourceRegistry.configs.value
-                        .firstOrNull { it.kind == SourceKind.DEEZER }
-                        ?.let { SourceRegistry.setEnabled(it.id, true) }
+                    enableDeezerSource()
                     showDeezerLogin = false
                 },
                 onCancel = { showDeezerLogin = false },
