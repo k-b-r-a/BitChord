@@ -203,11 +203,7 @@ fun DeezerLoginScreen(
                     settings.apply {
                         javaScriptEnabled = true
                         domStorageEnabled = true
-                        databaseEnabled = true
                         userAgentString = DESKTOP_USER_AGENT
-                        setSupportZoom(true)
-                        builtInZoomControls = true
-                        displayZoomControls = false
                     }
 
                     webChromeClient = object : WebChromeClient() {
@@ -218,36 +214,15 @@ fun DeezerLoginScreen(
 
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                            super.onPageStarted(view, url, favicon)
-                            url?.let {
-                                currentHost = runCatching {
-                                    android.net.Uri.parse(it).host ?: "deezer.com"
-                                }.getOrDefault("deezer.com")
-                            }
+                            url?.let { currentHost = runCatching { android.net.Uri.parse(it).host ?: "deezer.com" }.getOrDefault("deezer.com") }
                             tryCaptureCookie(url)
                         }
-
-                        override fun shouldOverrideUrlLoading(
-                            view: WebView?,
-                            request: WebResourceRequest?,
-                        ): Boolean {
+                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             tryCaptureCookie(request?.url?.toString())
                             return false
                         }
-
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            super.onPageFinished(view, url)
-                            tryCaptureCookie(url)
-                        }
-
-                        override fun doUpdateVisitedHistory(
-                            view: WebView?,
-                            url: String?,
-                            isReload: Boolean,
-                        ) {
-                            super.doUpdateVisitedHistory(view, url, isReload)
-                            tryCaptureCookie(url)
-                        }
+                        override fun onPageFinished(view: WebView?, url: String?) = tryCaptureCookie(url)
+                        override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) = tryCaptureCookie(url)
                     }
 
                     loadUrl(DEEZER_LOGIN_URL)
@@ -273,14 +248,8 @@ fun DeezerLoginScreen(
  */
 fun clearDeezerWebSession() {
     val cm = CookieManager.getInstance()
-    val domains = listOf(
-        "https://www.deezer.com",
-        "https://deezer.com",
-        "https://connect.deezer.com",
-    )
-    for (domain in domains) {
-        val existing = cm.getCookie(domain) ?: continue
-        existing.split(";").forEach { raw ->
+    listOf("https://www.deezer.com", "https://deezer.com", "https://connect.deezer.com").forEach { domain ->
+        cm.getCookie(domain)?.split(";")?.forEach { raw ->
             val name = raw.substringBefore("=").trim()
             if (name.isNotEmpty()) {
                 cm.setCookie(domain, "$name=; Max-Age=0; Path=/")

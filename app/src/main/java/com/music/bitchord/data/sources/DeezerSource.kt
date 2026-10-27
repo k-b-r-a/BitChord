@@ -65,12 +65,8 @@ class DeezerSource(
 
     private fun advertisedQualityFor(request: StreamRequest?): String {
         val tier = DeezerService.currentSession()?.tier ?: when {
-            runCatching { AppSettings.deezerTier.value }.getOrDefault("").contains("HiFi", ignoreCase = true) ->
-                DeezerTier.HIFI
-            runCatching { AppSettings.deezerTier.value }.getOrDefault("").contains("Premium", ignoreCase = true) ->
-                DeezerTier.PREMIUM
-            runCatching { AppSettings.deezerTier.value }.getOrDefault("").contains("Free", ignoreCase = true) ->
-                DeezerTier.FREE
+            AppSettings.deezerTier.value.contains("Premium", true) -> DeezerTier.PREMIUM
+            AppSettings.deezerTier.value.contains("Free", true) -> DeezerTier.FREE
             else -> DeezerTier.HIFI
         }
         return when (request) {
@@ -86,29 +82,17 @@ class DeezerSource(
 
     override suspend fun stream(trackId: String, request: StreamRequest): SourceStream? {
         TrackLog.d(TAG, "▶ Deezer getStreamUrl() trackId=$trackId request=$request")
-        val resolved = DeezerService.getStreamUrl(trackId, request)
-        if (resolved == null || resolved.url.isBlank()) {
+        val res = DeezerService.getStreamUrl(trackId, request) ?: return null.also {
             TrackLog.w(TAG, "  ✗ Deezer had no stream URL for $trackId")
-            return null
         }
-        val headers = if (resolved.encrypted) {
-            mapOf(DeezerCipher.HEADER_TRACK_ID to resolved.trackId)
-        } else {
-            emptyMap()
-        }
-        TrackLog.d(
-            TAG,
-            "  ✓ Deezer ${resolved.quality.code} (${resolved.quality.kbps ?: "lossless"}kbps) encrypted=${resolved.encrypted}",
-        )
+        val headers = if (res.encrypted) mapOf(DeezerCipher.HEADER_TRACK_ID to res.trackId) else emptyMap()
+        TrackLog.d(TAG, "  ✓ Deezer ${res.quality.code} (${res.quality.kbps ?: "lossless"}kbps) encrypted=${res.encrypted}")
         return SourceStream(
-            url = resolved.url,
-            format = StreamFormat(
-                codec = resolved.quality.codec,
-                kbps = resolved.quality.kbps,
-            ),
+            url = res.url,
+            format = StreamFormat(codec = res.quality.codec, kbps = res.quality.kbps),
             headers = headers,
-            belowRequest = resolved.belowRequest,
-            durationSec = resolved.durationSec,
+            belowRequest = res.belowRequest,
+            durationSec = res.durationSec,
         )
     }
 }

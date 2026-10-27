@@ -30,9 +30,8 @@ object DeezerCipher {
         val md5Bytes = MessageDigest.getInstance("MD5").digest(cleanId.toByteArray(Charsets.UTF_8))
         val md5Hex = buildString(32) {
             for (b in md5Bytes) {
-                val v = b.toInt() and 0xFF
-                append(Character.forDigit(v ushr 4, 16))
-                append(Character.forDigit(v and 0x0F, 16))
+                append(Character.forDigit((b.toInt() ushr 4) and 0x0F, 16))
+                append(Character.forDigit(b.toInt() and 0x0F, 16))
             }
         }
         return ByteArray(16) { i ->
@@ -88,31 +87,19 @@ object DeezerCipher {
 
         private fun fillNextChunk(): Boolean {
             while (!eof) {
-                var totalRead = 0
-                while (totalRead < CHUNK_SIZE) {
-                    val n = upstream.read(chunkBuffer, totalRead, CHUNK_SIZE - totalRead)
-                    if (n == -1) {
-                        eof = true
-                        break
-                    }
-                    if (n > 0) {
-                        totalRead += n
-                    }
+                var total = 0
+                while (total < CHUNK_SIZE) {
+                    val n = upstream.read(chunkBuffer, total, CHUNK_SIZE - total)
+                    if (n == -1) { eof = true; break }
+                    if (n > 0) total += n
                 }
-                if (totalRead == 0) {
-                    return false
-                }
-                if (isEncryptedChunk(chunkIndex, totalRead)) {
-                    decryptChunkInPlace(key, chunkBuffer, 0)
-                }
-                chunkIndex++
-                val skip = pendingSkip.coerceAtMost(totalRead)
+                if (total == 0) return false
+                if (isEncryptedChunk(chunkIndex++, total)) decryptChunkInPlace(key, chunkBuffer, 0)
+                val skip = pendingSkip.coerceAtMost(total)
                 pendingSkip -= skip
                 chunkPos = skip
-                chunkLimit = totalRead
-                if (chunkPos < chunkLimit) {
-                    return true
-                }
+                chunkLimit = total
+                if (chunkPos < chunkLimit) return true
             }
             return false
         }

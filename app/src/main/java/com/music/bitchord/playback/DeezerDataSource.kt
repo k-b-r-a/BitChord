@@ -47,14 +47,9 @@ class DeezerDataSource(
     }
 
     override fun open(dataSpec: DataSpec): Long {
-        val headerTrackId = dataSpec.httpRequestHeaders.entries
-            .firstOrNull { it.key.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true) }
-            ?.value
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-        val trackId = headerTrackId ?: runCatching {
-            dataSpec.uri.getQueryParameter("dz_tid")?.trim()?.takeIf { it.isNotEmpty() }
-        }.getOrNull()
+        val trackId = dataSpec.httpRequestHeaders.entries
+            .firstOrNull { it.key.equals(DeezerCipher.HEADER_TRACK_ID, true) }?.value?.trim()?.takeIf { it.isNotEmpty() }
+            ?: runCatching { dataSpec.uri.getQueryParameter("dz_tid")?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
 
         if (trackId == null) {
             passthrough = true
@@ -75,9 +70,7 @@ class DeezerDataSource(
         chunkLimit = 0
         upstreamEof = false
 
-        val cleanHeaders = dataSpec.httpRequestHeaders.filterKeys {
-            !it.equals(DeezerCipher.HEADER_TRACK_ID, ignoreCase = true)
-        }
+        val cleanHeaders = dataSpec.httpRequestHeaders.filterKeys { !it.equals(DeezerCipher.HEADER_TRACK_ID, true) }
         val upstreamSpec = dataSpec.buildUpon()
             .setPosition(alignedStart)
             .setLength(C.LENGTH_UNSET.toLong())
@@ -85,19 +78,12 @@ class DeezerDataSource(
             .build()
 
         val upstreamLen = upstream.open(upstreamSpec)
-        val availableFromRequestedStart = if (upstreamLen != C.LENGTH_UNSET.toLong()) {
-            (upstreamLen - skipInFirstChunk).coerceAtLeast(0L)
-        } else {
-            C.LENGTH_UNSET.toLong()
-        }
+        val available = if (upstreamLen != C.LENGTH_UNSET.toLong()) (upstreamLen - skipInFirstChunk).coerceAtLeast(0L) else C.LENGTH_UNSET.toLong()
 
         bytesRemaining = when {
-            dataSpec.length != C.LENGTH_UNSET.toLong() && availableFromRequestedStart != C.LENGTH_UNSET.toLong() ->
-                minOf(dataSpec.length, availableFromRequestedStart)
-            dataSpec.length != C.LENGTH_UNSET.toLong() ->
-                dataSpec.length
-            else ->
-                availableFromRequestedStart
+            dataSpec.length != C.LENGTH_UNSET.toLong() && available != C.LENGTH_UNSET.toLong() -> minOf(dataSpec.length, available)
+            dataSpec.length != C.LENGTH_UNSET.toLong() -> dataSpec.length
+            else -> available
         }
 
         return bytesRemaining
@@ -134,35 +120,19 @@ class DeezerDataSource(
     private fun fillNextChunk(): Boolean {
         val activeKey = key ?: return false
         while (!upstreamEof) {
-            var totalRead = 0
-            while (totalRead < DeezerCipher.CHUNK_SIZE) {
-                val n = upstream.read(
-                    chunkBuffer,
-                    totalRead,
-                    DeezerCipher.CHUNK_SIZE - totalRead,
-                )
-                if (n == C.RESULT_END_OF_INPUT) {
-                    upstreamEof = true
-                    break
-                }
-                if (n > 0) {
-                    totalRead += n
-                }
+            var total = 0
+            while (total < DeezerCipher.CHUNK_SIZE) {
+                val n = upstream.read(chunkBuffer, total, DeezerCipher.CHUNK_SIZE - total)
+                if (n == C.RESULT_END_OF_INPUT) { upstreamEof = true; break }
+                if (n > 0) total += n
             }
-            if (totalRead == 0) {
-                return false
-            }
-            if (DeezerCipher.isEncryptedChunk(chunkIndex, totalRead)) {
-                DeezerCipher.decryptChunkInPlace(activeKey, chunkBuffer, 0)
-            }
-            chunkIndex++
-            val skip = pendingSkip.coerceAtMost(totalRead)
+            if (total == 0) return false
+            if (DeezerCipher.isEncryptedChunk(chunkIndex++, total)) DeezerCipher.decryptChunkInPlace(activeKey, chunkBuffer, 0)
+            val skip = pendingSkip.coerceAtMost(total)
             pendingSkip -= skip
             chunkPos = skip
-            chunkLimit = totalRead
-            if (chunkPos < chunkLimit) {
-                return true
-            }
+            chunkLimit = total
+            if (chunkPos < chunkLimit) return true
         }
         return false
     }

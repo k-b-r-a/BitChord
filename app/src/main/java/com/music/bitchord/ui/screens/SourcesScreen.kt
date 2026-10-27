@@ -974,11 +974,7 @@ private fun DeezerAccountSection(
     val statusText = when {
         validating -> stringResource(R.string.deezer_validating)
         authError != null -> authError
-        arlConfigured && userName.isNotBlank() && tierLabel.isNotBlank() ->
-            "${stringResource(R.string.connected)} · $userName · $tierLabel"
-        arlConfigured && tierLabel.isNotBlank() ->
-            "${stringResource(R.string.connected)} · $tierLabel"
-        arlConfigured -> stringResource(R.string.connected)
+        arlConfigured -> listOfNotNull(stringResource(R.string.connected), userName.ifBlank { null }, tierLabel.ifBlank { null }).joinToString(" · ")
         else -> stringResource(R.string.deezer_not_configured)
     }
 
@@ -1027,12 +1023,10 @@ private fun SourceConfig.statusLine(health: SourceHealth?): String = when {
     !isComplete -> stringResource(R.string.source_setup_required)
     kind == SourceKind.DEEZER && health == null -> {
         val arl = AppSettings.deezerArl.value
-        val tier = AppSettings.deezerTier.value
-        val user = AppSettings.deezerUserName.value
+        val details = listOfNotNull(AppSettings.deezerUserName.value.ifBlank { null }, AppSettings.deezerTier.value.ifBlank { null })
         when {
             arl.isBlank() -> stringResource(R.string.deezer_not_configured)
-            user.isNotBlank() && tier.isNotBlank() -> "$user · $tier"
-            tier.isNotBlank() -> tier
+            details.isNotEmpty() -> details.joinToString(" · ")
             else -> kind.labels.take(3).joinToString(" · ")
         }
     }
