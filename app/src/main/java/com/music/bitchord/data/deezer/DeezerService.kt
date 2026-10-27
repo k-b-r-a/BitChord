@@ -6,7 +6,6 @@ import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.sources.StreamRequest
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
@@ -16,7 +15,6 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
-import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,8 +34,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
-import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 private const val TAG = "DeezerService"
 private const val GATEWAY_URL = "https://www.deezer.com/ajax/gw-light.php"
@@ -116,15 +112,8 @@ object DeezerService {
 
     private val client by lazy {
         HttpClient(OkHttp) {
-            install(ContentNegotiation) {
-                json(json)
-            }
             engine {
-                config {
-                    connectTimeout(15, TimeUnit.SECONDS)
-                    readTimeout(15, TimeUnit.SECONDS)
-                    followRedirects(true)
-                }
+                preconfigured = com.music.bitchord.data.Http.client
             }
         }
     }
@@ -857,7 +846,9 @@ object DeezerService {
             ?: item["duration"]?.jsonPrimitive?.longOrNull
             ?: 0L
         val durationText = if (durationSec > 0L) {
-            String.format(Locale.ROOT, "%d:%02d", durationSec / 60L, durationSec % 60L)
+            val min = durationSec / 60L
+            val sec = (durationSec % 60L).toString().padStart(2, '0')
+            "$min:$sec"
         } else {
             null
         }
