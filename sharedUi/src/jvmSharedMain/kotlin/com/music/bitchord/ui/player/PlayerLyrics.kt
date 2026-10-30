@@ -106,12 +106,14 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalDensity
+import org.jetbrains.compose.resources.Font
 import org.jetbrains.compose.resources.stringArrayResource
 import org.jetbrains.compose.resources.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -173,6 +175,14 @@ private fun isRtl(text: String): Boolean {
 private fun textDirectionFor(text: String): androidx.compose.ui.text.style.TextDirection {
     return if (isRtl(text)) androidx.compose.ui.text.style.TextDirection.Rtl
     else androidx.compose.ui.text.style.TextDirection.Ltr
+}
+
+/** Whether [text] carries Arabic-script letters (Persian, Arabic, Urdu…). */
+private fun usesArabicScript(text: String): Boolean = text.any { ch ->
+    val code = ch.code
+    code in 0x0600..0x06FF || code in 0x0750..0x077F ||
+        code in 0x08A0..0x08FF || code in 0xFB50..0xFDFF ||
+        code in 0xFE70..0xFEFF
 }
 
 /** Whether this text should align to the right end of its box. */
@@ -351,6 +361,16 @@ private val GAP_ROW_SPACING = 16.dp
  */
 private val LINE_FALLOFF_ALPHA = floatArrayOf(1f, 0.8f, 0.7f, 0.58f, 0.46f)
 private val LINE_FALLOFF_BLUR = arrayOf(0.dp, 1.dp, 1.dp, 1.7.dp, 2.4.dp)
+
+/**
+ * The same falloff for a phone, where the sung line is read from the top and
+ * the whole stack lies below it. [LINE_FALLOFF_ALPHA] was set on a centred
+ * column with only a few rows either side; down a tall phone column it reads as
+ * one flat brightness, so this keeps going for a row longer and steeper. Its
+ * last entry is still a floor, not zero — the bottom of the screen stays
+ * readable at a glance.
+ */
+private val LINE_FALLOFF_ALPHA_PHONE = floatArrayOf(1f, 0.74f, 0.6f, 0.48f, 0.4f, 0.34f)
 
 /**
  * The shape of the page the lyrics are going to fill.
@@ -2093,11 +2113,12 @@ internal fun LyricsPanel(
             // rows around it stay readable so you can follow back over what was
             // just sung as well as ahead, and everything past that recedes to
             // the same floor rather than fading to nothing.
-            val step = distance.coerceAtMost(LINE_FALLOFF_ALPHA.lastIndex)
+            val falloff = if (centerFocus) LINE_FALLOFF_ALPHA else LINE_FALLOFF_ALPHA_PHONE
+            val step = distance.coerceAtMost(falloff.lastIndex)
             val blur by animateDpAsState(
                 targetValue = when {
                     !isSynced || reduceDynamicBlur || !lyricsBlur || browsing || isActive -> 0.dp
-                    else -> LINE_FALLOFF_BLUR[step]
+                    else -> LINE_FALLOFF_BLUR[step.coerceAtMost(LINE_FALLOFF_BLUR.lastIndex)]
                 },
                 animationSpec = tween(LYRIC_SETTLE_MS, easing = LYRIC_EASING),
                 label = "lyricBlur",
@@ -2109,7 +2130,7 @@ internal fun LyricsPanel(
                     // Reading by hand is not following along: the stack flattens
                     // to one brightness so no row is being pointed at.
                     browsing -> BROWSING_ALPHA
-                    else -> LINE_FALLOFF_ALPHA[step]
+                    else -> falloff[step]
                 },
                 animationSpec = tween(LYRIC_SETTLE_MS, easing = LYRIC_EASING),
                 label = "lyricAlpha",
@@ -2550,6 +2571,12 @@ private fun PanelVoice(
     rise: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    // Vazirmatn for Persian/Arabic-script lines; Latin lines keep the player's font.
+    val arabicScript = remember(line.text) { usesArabicScript(line.text) }
+    val lyricStyle = if (arabicScript) {
+        val vazirmatn = Font(Res.font.vazirmatn_regular)
+        remember(style, vazirmatn) { style.copy(fontFamily = FontFamily(vazirmatn)) }
+    } else style
     // The line being sung is white; every other one — sung or still to come —
     // takes the sleeve's tint, as the rest of the player's secondary text does
     // (see [LocalPlayerTint]). Faded across the handover rather than cut, so a
@@ -2576,7 +2603,7 @@ private fun PanelVoice(
         SweptLyricLine(
             line = line,
             clock = clock,
-            style = style,
+            style = lyricStyle,
             dimAlpha = tail,
             modifier = modifier,
             glowAlpha = glowAlpha,
@@ -2600,7 +2627,7 @@ private fun PanelVoice(
         SweptLyricLine(
             line = line,
             clock = clock,
-            style = style,
+            style = lyricStyle,
             dimAlpha = tail,
             modifier = modifier,
             glowAlpha = 0f,
@@ -2628,7 +2655,7 @@ private fun PanelVoice(
         var layout by remember(line.text) { mutableStateOf<TextLayoutResult?>(null) }
         Text(
             text = line.text,
-            style = style,
+            style = lyricStyle,
             color = color.copy(alpha = lit),
             onTextLayout = { layout = it },
             modifier = modifier.lyricParticles(layout, translationProgress, room).padding(room),
