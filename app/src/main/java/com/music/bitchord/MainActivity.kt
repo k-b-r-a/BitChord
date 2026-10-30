@@ -5902,8 +5902,6 @@ private fun BitChordApp(
                 inOwnWindow = playerRaised || songActions != null || browseActions != null,
             )
         }
-            )
-        }
 
     }
 }

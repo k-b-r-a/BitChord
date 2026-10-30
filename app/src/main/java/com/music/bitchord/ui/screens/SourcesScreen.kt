@@ -992,14 +992,14 @@ private fun DeezerAccountSection(
         footer = stringResource(R.string.deezer_description),
     ) {
         SettingsRow(
-            icon = Icons.Rounded.GraphicEq,
+            icon = SfIcons.GraphicEq,
             title = stringResource(R.string.deezer_paste_arl),
             subtitle = statusText,
             onClick = onEditArl,
         )
         RowDivider()
         SettingsRow(
-            icon = Icons.Rounded.Cloud,
+            icon = SfIcons.Cloud,
             title = stringResource(R.string.deezer_sign_in_browser),
             subtitle = stringResource(R.string.deezer_sign_in_title),
             onClick = onOpenBrowserLogin,
@@ -1007,7 +1007,7 @@ private fun DeezerAccountSection(
         if (arlConfigured) {
             RowDivider()
             SettingsRow(
-                icon = Icons.Rounded.Dns,
+                icon = SfIcons.Dns,
                 title = stringResource(R.string.deezer_refresh_session),
                 subtitle = if (validating) stringResource(R.string.checking) else statusText,
                 onClick = {
@@ -1018,7 +1018,7 @@ private fun DeezerAccountSection(
             )
             RowDivider()
             SettingsRow(
-                icon = Icons.Rounded.DeleteSweep,
+                icon = SfIcons.DeleteSweep,
                 title = stringResource(R.string.deezer_disconnect),
                 onClick = onDisconnect,
             )
